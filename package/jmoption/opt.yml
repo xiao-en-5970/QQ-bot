@@ -9,7 +9,7 @@ client:
   #  html - 表示网页端
   #  api - 表示APP端
   # APP端不限ip兼容性好，网页端限制ip地区但效率高
-  impl: html
+  impl: api
 
   # domain: 禁漫域名配置，一般无需配置，jmcomic会根据上面的impl自动设置相应域名
   # 该配置项需要和上面的impl结合使用，因为禁漫网页端和APP端使用的是不同域名，
@@ -20,6 +20,8 @@ client:
     html:
       - 18comic.vip
       - 18comic.org
+
+
     api:
       - www.jmapiproxyxxx.vip
 
@@ -40,6 +42,8 @@ client:
       #   https: 127.0.0.1:7890
       proxies: system
 
+
+
       # cookies: 帐号配置，默认是 null，表示未登录状态访问JM。
       # 禁漫的大部分本子，下载是不需要登录的；少部分敏感题材需要登录才能看。
       # 如果你希望以登录状态下载本子，最简单的方式是配置一下浏览器的cookies，
@@ -49,7 +53,7 @@ client:
       # 假如你要访问的是 `18comic.vip`，那么你配置的cookies也要来自于 `18comic.vip`，不能配置来自于 `jm-comic.club` 的cookies。
       # 如果你发现配置了cookies还是没有效果，大概率就是你配置的cookies和代码访问的域名不一致。
       cookies:
-        AVS: qkwehjjasdowqeq # 这个值是乱打的，不能用
+        AVS: tson63na3embo3uq6smem0t43h # 这个值是乱打的，不能用
 
 # 下载配置
 download:
@@ -76,6 +80,7 @@ dir_rule:
   base_dir: ./tmp
 
   # rule: 规则dsl。
+  rule: Bd_Aid_Pindex
   # 本项只建议了解编程的朋友定制，实现在这个类: jmcomic.jm_option.DirRule
   # 写法:
   # 1. 以'Bd'开头，表示根目录

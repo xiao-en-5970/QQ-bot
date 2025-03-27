@@ -14,7 +14,7 @@ import (
 func ParseCmd(client *http.Client, group_id int64, userID int64, data model.TextData) (err error) {
 	data.Text = strings.TrimSpace(data.Text)
 	dataSlice := strings.Split(data.Text, " ")
-
+	chapter := int64(1)
 	switch dataSlice[0] {
 	case "jm":
 		if len(dataSlice) < 2 {
@@ -28,8 +28,18 @@ func ParseCmd(client *http.Client, group_id int64, userID int64, data model.Text
 			_ = SendGroupMsg(client, group_id, userID, fmt.Sprintf("jm%s\n%s", global.ErrCmdArgFault, global.ErrCmdJmHelp))
 			return nil
 		}
-		_ = SendGroupMsg(client, group_id, userID, global.InfoCmdJmFindingBook+strconv.FormatInt(num, 10))
-		global.ChanToJm <- num
+
+		if len(dataSlice) > 2 {
+			chapter, err = strconv.ParseInt(dataSlice[2], 10, 64)
+			if err != nil {
+				zaplog.Logger.Warnf("Arg parse error: %v", err)
+				return err
+			}
+		}
+
+		_ = SendGroupMsg(client, group_id, userID, fmt.Sprintf("%s %d 第 %d 章", global.InfoCmdJmFindingBook, num, chapter))
+		global.ChanToJm <- model.ChanToJM{GroupID: group_id, Number: num, Chapter: chapter, UserID: userID}
+		zaplog.Logger.Infof("global.ChanToJm <- ，%#v\n", len(global.ChanToJm))
 
 	default:
 		if err = SendGroupMsg(client, group_id, userID, fmt.Sprintf("%s\n%s", global.ErrCmdNotFound, global.ErrCmdMenu)); err != nil {

@@ -1,2 +1,6 @@
 .venv
 zap.log
+tmp
+pdftmp
+.idea
+.git

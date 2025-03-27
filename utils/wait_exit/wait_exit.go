@@ -6,11 +6,13 @@ import (
 	"os"
 	"os/signal"
 	"qq_bot/global"
+	zaplog "qq_bot/utils/zap"
 	"syscall"
 )
 
 func WaitExit(cancel context.CancelFunc) {
 	defer global.Wg.Done()
+	defer zaplog.Logger.Infof("协程WaitExit退出\n")
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 	<-signalChan

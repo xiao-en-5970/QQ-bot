@@ -50,17 +50,18 @@ func main() {
 		panic(err)
 	}
 	zaplog.Logger.Infof("userid get succcess! userid: %d", *conf.Cfg.UserID)
-
+	//获取ctx
 	ctx, cancel := context.WithCancel(context.Background())
+
 	global.Wg.Add(2)
+	global.Wg.Add(len(conf.Cfg.GroupID))
 	go wait_exit.WaitExit(cancel)
 	go jm.Jmcomic(ctx)
-	global.Wg.Add(len(conf.Cfg.GroupID))
 	for _, groupID := range conf.Cfg.GroupID {
-		go ticker.Ticker(5*time.Second, ctx, 10, client, groupID, 0)
+		go ticker.Ticker(10*time.Second, ctx, -1, client, groupID)
 	}
-
-	defer global.Wg.Wait()
+	global.Wg.Wait()
+	defer close(global.ChanToJm)
 	defer client.CloseIdleConnections()
 	defer zaplog.Logger.Sync()
 	defer zaplog.LogFile.Close()
