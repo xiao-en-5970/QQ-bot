@@ -13,7 +13,7 @@ import (
 
 func GetNewAtMessage(client *http.Client, LatestSeq int64) (err error, NewLatestSeq int64) {
 	err, resp := ser.GetGroupMsgHistory(client, &model.GetGroupMsgHistoryReq{
-		GroupID: conf.Cfg.GroupID,
+		GroupID: *conf.Cfg.GroupID,
 	})
 	if err != nil {
 		zaplog.Logger.Error(err.Error())
@@ -34,7 +34,7 @@ func GetNewAtMessage(client *http.Client, LatestSeq int64) (err error, NewLatest
 	}
 	//如果没有未读消息，则返回
 	if LatestSeq == resp.Data.Messages[length-1].MessageSeq {
-		zaplog.Logger.Infof("Message is already latest NewLatestSeq: %d\n", NewLatestSeq)
+		zaplog.Logger.Infof("Message is already latest NewLatestSeq: %d\n", LatestSeq)
 		return nil, LatestSeq
 	}
 	//找到哪些是未读消息

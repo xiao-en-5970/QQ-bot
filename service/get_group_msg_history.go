@@ -41,6 +41,6 @@ func GetGroupMsgHistory(client *http.Client, messageReq *model.GetGroupMsgHistor
 		zaplog.Logger.Error(err.Error())
 		return err, nil
 	}
-	zaplog.Logger.Infof("%#v", messageResp)
+	//zaplog.Logger.Infof("%#v", messageResp)
 	return nil, messageResp
 }

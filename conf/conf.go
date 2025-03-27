@@ -10,7 +10,7 @@ var Cfg Config
 type Config struct {
 	Address string `mapstructure:"address"`
 
-	GroupID int64  `mapstructure:"group_id"`
+	GroupID *int64 `mapstructure:"group_id,omitempty"`
 	UserID  *int64 `mapstructure:"user_id,omitempty"`
 }
 

@@ -9,9 +9,9 @@ import (
 )
 
 func SendGroupMsg(client *http.Client, text string) (err error) {
-	
+
 	err, _ = service.SendGroupMsg(client, &model.SendGroupMsgReq{
-		GroupID: conf.Cfg.GroupID,
+		GroupID: *conf.Cfg.GroupID,
 		Message: []model.MessageContent{
 			{
 				Type: "text",

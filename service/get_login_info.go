@@ -39,7 +39,7 @@ func GetLoginInfo(client *http.Client, messageReq *model.GetLoginInfoReq) (err e
 		zaplog.Logger.Error(err.Error())
 		return err, nil
 	}
-	zaplog.Logger.Infof("%#v", messageResp)
+	//zaplog.Logger.Infof("%#v", messageResp)
 	return nil, messageResp
 
 }
