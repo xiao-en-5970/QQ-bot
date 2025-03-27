@@ -14,7 +14,6 @@ func GetCmdLine() (err error, num int64) {
 		zaplog.Logger.Fatalf("Usage: go run main.go <int64_value> or add group_id in test.yaml")
 		return errors.New("usage: go run main.go <int64_value> or write group_id in test.yaml"), 0
 	}
-
 	// 获取第一个参数
 	arg := os.Args[1]
 

@@ -669,3 +669,334 @@
 {"level":"info","timestamp":"2025-03-27T17:48:19.122+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662641\n"}
 {"level":"info","timestamp":"2025-03-27T17:48:24.057+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 17:48:24 CST"}
 {"level":"info","timestamp":"2025-03-27T17:48:24.113+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662642\n"}
+{"level":"info","timestamp":"2025-03-27T17:58:23.705+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T17:58:23.714+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T17:58:23.714+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"fatal","timestamp":"2025-03-27T17:58:23.731+0800","caller":"cmdline/cmdline.go:14","msg":"Usage: go run main.go <int64_value> or add group_id in test.yaml","stacktrace":"qq_bot/utils/cmdline.GetCmdLine\n\tE:/文档/It's MyGO/qqbot/utils/cmdline/cmdline.go:14\nmain.main\n\tE:/文档/It's MyGO/qqbot/main.go:39\nruntime.main\n\tE:/ENV/Go/src/runtime/proc.go:271"}
+{"level":"info","timestamp":"2025-03-27T17:58:31.592+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T17:58:31.599+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T17:58:31.600+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T17:58:31.614+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T17:58:36.622+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 17:58:36 CST"}
+{"level":"info","timestamp":"2025-03-27T17:58:36.677+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662649\n"}
+{"level":"info","timestamp":"2025-03-27T17:58:41.624+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 17:58:41 CST"}
+{"level":"info","timestamp":"2025-03-27T17:58:41.688+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662649\n"}
+{"level":"info","timestamp":"2025-03-27T17:58:46.615+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 17:58:46 CST"}
+{"level":"info","timestamp":"2025-03-27T17:58:46.683+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662650\n"}
+{"level":"info","timestamp":"2025-03-27T17:58:46.683+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T17:58:51.620+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 17:58:51 CST"}
+{"level":"info","timestamp":"2025-03-27T17:58:51.669+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662651\n"}
+{"level":"info","timestamp":"2025-03-27T17:58:51.669+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T17:58:56.623+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 17:58:56 CST"}
+{"level":"info","timestamp":"2025-03-27T17:58:56.707+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662653\n"}
+{"level":"info","timestamp":"2025-03-27T17:59:01.616+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 6 次任务，当前时间：Thu, 27 Mar 2025 17:59:01 CST"}
+{"level":"info","timestamp":"2025-03-27T17:59:01.650+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662654\n"}
+{"level":"info","timestamp":"2025-03-27T17:59:06.617+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 7 次任务，当前时间：Thu, 27 Mar 2025 17:59:06 CST"}
+{"level":"info","timestamp":"2025-03-27T17:59:06.711+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662655\n"}
+{"level":"info","timestamp":"2025-03-27T17:59:06.711+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:03:00.457+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:03:00.465+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:03:00.465+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"fatal","timestamp":"2025-03-27T18:03:00.482+0800","caller":"cmdline/cmdline.go:14","msg":"Usage: go run main.go <int64_value> or add group_id in test.yaml","stacktrace":"qq_bot/utils/cmdline.GetCmdLine\n\tE:/文档/It's MyGO/qqbot/utils/cmdline/cmdline.go:14\nmain.main\n\tE:/文档/It's MyGO/qqbot/main.go:39\nruntime.main\n\tE:/ENV/Go/src/runtime/proc.go:271"}
+{"level":"info","timestamp":"2025-03-27T18:03:04.481+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:03:04.489+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:03:04.489+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:03:04.504+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:03:09.508+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:03:09 CST"}
+{"level":"info","timestamp":"2025-03-27T18:03:09.551+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662659\n"}
+{"level":"info","timestamp":"2025-03-27T18:03:14.508+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:03:14 CST"}
+{"level":"info","timestamp":"2025-03-27T18:03:14.568+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662660\n"}
+{"level":"info","timestamp":"2025-03-27T18:03:14.568+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:03:14.568+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:03:19.505+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:03:19 CST"}
+{"level":"info","timestamp":"2025-03-27T18:03:19.550+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662661\n"}
+{"level":"info","timestamp":"2025-03-27T18:03:19.550+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:03:19.550+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:04:47.906+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:04:47.914+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:04:47.914+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"fatal","timestamp":"2025-03-27T18:04:47.930+0800","caller":"cmdline/cmdline.go:14","msg":"Usage: go run main.go <int64_value> or add group_id in test.yaml","stacktrace":"qq_bot/utils/cmdline.GetCmdLine\n\tE:/文档/It's MyGO/qqbot/utils/cmdline/cmdline.go:14\nmain.main\n\tE:/文档/It's MyGO/qqbot/main.go:39\nruntime.main\n\tE:/ENV/Go/src/runtime/proc.go:271"}
+{"level":"info","timestamp":"2025-03-27T18:04:51.962+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:04:51.970+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:04:51.970+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:04:51.985+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:04:56.987+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:04:56 CST"}
+{"level":"info","timestamp":"2025-03-27T18:04:57.049+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662665\n"}
+{"level":"info","timestamp":"2025-03-27T18:05:01.997+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:05:01 CST"}
+{"level":"info","timestamp":"2025-03-27T18:05:02.028+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662665\n"}
+{"level":"info","timestamp":"2025-03-27T18:05:06.986+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:05:06 CST"}
+{"level":"info","timestamp":"2025-03-27T18:05:07.031+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662666\n"}
+{"level":"info","timestamp":"2025-03-27T18:05:07.031+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:05:07.031+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:05:07.318+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:05:11.997+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 18:05:11 CST"}
+{"level":"info","timestamp":"2025-03-27T18:05:12.043+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662668\n"}
+{"level":"info","timestamp":"2025-03-27T18:05:12.043+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:05:16.988+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 18:05:16 CST"}
+{"level":"info","timestamp":"2025-03-27T18:05:17.021+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662670\n"}
+{"level":"info","timestamp":"2025-03-27T18:05:17.021+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:05:17.021+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:05:21.996+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 6 次任务，当前时间：Thu, 27 Mar 2025 18:05:21 CST"}
+{"level":"info","timestamp":"2025-03-27T18:05:22.026+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662671\n"}
+{"level":"info","timestamp":"2025-03-27T18:05:22.026+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:05:22.026+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:09:16.037+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:09:16.045+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:09:16.045+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:09:16.062+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:09:21.070+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:09:21 CST"}
+{"level":"error","timestamp":"2025-03-27T18:09:21.071+0800","caller":"service/get_group_msg_history.go:28","msg":"Post \"http://localhost:3000/get_group_msg_history\": read tcp 127.0.0.1:10588->127.0.0.1:3000: wsarecv: An existing connection was forcibly closed by the remote host.","stacktrace":"qq_bot/service.GetGroupMsgHistory\n\tE:/文档/It's MyGO/qqbot/service/get_group_msg_history.go:28\nqq_bot/logic.GetNewAtMessage\n\tE:/文档/It's MyGO/qqbot/logic/get_new_at_message.go:15\nqq_bot/utils/ticker.Ticker\n\tE:/文档/It's MyGO/qqbot/utils/ticker/ticker.go:26\nmain.main\n\tE:/文档/It's MyGO/qqbot/main.go:52\nruntime.main\n\tE:/ENV/Go/src/runtime/proc.go:271"}
+{"level":"error","timestamp":"2025-03-27T18:09:21.071+0800","caller":"logic/get_new_at_message.go:19","msg":"Post \"http://localhost:3000/get_group_msg_history\": read tcp 127.0.0.1:10588->127.0.0.1:3000: wsarecv: An existing connection was forcibly closed by the remote host.","stacktrace":"qq_bot/logic.GetNewAtMessage\n\tE:/文档/It's MyGO/qqbot/logic/get_new_at_message.go:19\nqq_bot/utils/ticker.Ticker\n\tE:/文档/It's MyGO/qqbot/utils/ticker/ticker.go:26\nmain.main\n\tE:/文档/It's MyGO/qqbot/main.go:52\nruntime.main\n\tE:/ENV/Go/src/runtime/proc.go:271"}
+{"level":"error","timestamp":"2025-03-27T18:09:21.071+0800","caller":"ticker/ticker.go:28","msg":"Post \"http://localhost:3000/get_group_msg_history\": read tcp 127.0.0.1:10588->127.0.0.1:3000: wsarecv: An existing connection was forcibly closed by the remote host.","stacktrace":"qq_bot/utils/ticker.Ticker\n\tE:/文档/It's MyGO/qqbot/utils/ticker/ticker.go:28\nmain.main\n\tE:/文档/It's MyGO/qqbot/main.go:52\nruntime.main\n\tE:/ENV/Go/src/runtime/proc.go:271"}
+{"level":"info","timestamp":"2025-03-27T18:09:41.977+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:09:41.984+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:09:41.984+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:09:41.999+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:09:47.014+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:09:47 CST"}
+{"level":"info","timestamp":"2025-03-27T18:09:47.076+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662676\n"}
+{"level":"info","timestamp":"2025-03-27T18:09:52.015+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:09:52 CST"}
+{"level":"info","timestamp":"2025-03-27T18:09:52.089+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662678\n"}
+{"level":"info","timestamp":"2025-03-27T18:09:52.089+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:09:52.090+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:09:57.011+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:09:57 CST"}
+{"level":"info","timestamp":"2025-03-27T18:09:57.053+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662678\n"}
+{"level":"info","timestamp":"2025-03-27T18:10:02.000+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 18:10:02 CST"}
+{"level":"info","timestamp":"2025-03-27T18:10:02.075+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662678\n"}
+{"level":"info","timestamp":"2025-03-27T18:10:07.013+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 18:10:07 CST"}
+{"level":"info","timestamp":"2025-03-27T18:10:07.058+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662680\n"}
+{"level":"info","timestamp":"2025-03-27T18:10:07.058+0800","caller":"logic/get_new_at_message.go:67","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:10:12.014+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 6 次任务，当前时间：Thu, 27 Mar 2025 18:10:12 CST"}
+{"level":"info","timestamp":"2025-03-27T18:10:12.088+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662680\n"}
+{"level":"info","timestamp":"2025-03-27T18:15:10.308+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:15:10.315+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:15:10.315+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:15:10.331+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:15:15.333+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:15:15 CST"}
+{"level":"info","timestamp":"2025-03-27T18:15:15.396+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662681\n"}
+{"level":"info","timestamp":"2025-03-27T18:15:20.331+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:15:20 CST"}
+{"level":"info","timestamp":"2025-03-27T18:15:20.374+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662681\n"}
+{"level":"info","timestamp":"2025-03-27T18:15:25.333+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:15:25 CST"}
+{"level":"info","timestamp":"2025-03-27T18:15:25.376+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662681\n"}
+{"level":"info","timestamp":"2025-03-27T18:15:30.338+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 18:15:30 CST"}
+{"level":"info","timestamp":"2025-03-27T18:15:30.384+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662683\n"}
+{"level":"info","timestamp":"2025-03-27T18:15:30.384+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:15:30.384+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:15:35.335+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 18:15:35 CST"}
+{"level":"info","timestamp":"2025-03-27T18:15:35.379+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662683\n"}
+{"level":"info","timestamp":"2025-03-27T18:16:10.215+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:16:10.222+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:16:10.223+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:16:10.239+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:16:15.241+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:16:15 CST"}
+{"level":"info","timestamp":"2025-03-27T18:16:15.333+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662685\n"}
+{"level":"info","timestamp":"2025-03-27T18:16:20.245+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:16:20 CST"}
+{"level":"info","timestamp":"2025-03-27T18:16:20.275+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662685\n"}
+{"level":"info","timestamp":"2025-03-27T18:16:25.245+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:16:25 CST"}
+{"level":"info","timestamp":"2025-03-27T18:16:25.289+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662685\n"}
+{"level":"info","timestamp":"2025-03-27T18:16:30.247+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 18:16:30 CST"}
+{"level":"info","timestamp":"2025-03-27T18:16:30.282+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662685\n"}
+{"level":"info","timestamp":"2025-03-27T18:16:37.544+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:16:37.551+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:16:37.551+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:16:37.566+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:16:42.575+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:16:42 CST"}
+{"level":"info","timestamp":"2025-03-27T18:16:42.642+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662687\n"}
+{"level":"info","timestamp":"2025-03-27T18:16:47.569+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:16:47 CST"}
+{"level":"info","timestamp":"2025-03-27T18:16:47.643+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662687\n"}
+{"level":"info","timestamp":"2025-03-27T18:16:52.569+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:16:52 CST"}
+{"level":"info","timestamp":"2025-03-27T18:16:52.614+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662689\n"}
+{"level":"info","timestamp":"2025-03-27T18:16:52.614+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:16:52.614+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:16:57.576+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 18:16:57 CST"}
+{"level":"info","timestamp":"2025-03-27T18:16:57.650+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662691\n"}
+{"level":"info","timestamp":"2025-03-27T18:16:57.650+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:16:58.013+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:17:02.579+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 18:17:02 CST"}
+{"level":"info","timestamp":"2025-03-27T18:17:02.636+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662691\n"}
+{"level":"info","timestamp":"2025-03-27T18:18:45.643+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:18:45.650+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:18:45.650+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:18:45.667+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:18:50.680+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:18:50 CST"}
+{"level":"info","timestamp":"2025-03-27T18:18:50.770+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662695\n"}
+{"level":"info","timestamp":"2025-03-27T18:18:55.670+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:18:55 CST"}
+{"level":"info","timestamp":"2025-03-27T18:18:55.735+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662695\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:00.673+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:19:00 CST"}
+{"level":"info","timestamp":"2025-03-27T18:19:00.771+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662695\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:05.678+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 18:19:05 CST"}
+{"level":"info","timestamp":"2025-03-27T18:19:05.738+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662695\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:10.675+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 18:19:10 CST"}
+{"level":"info","timestamp":"2025-03-27T18:19:10.737+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662697\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:10.738+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:19:10.738+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:19:11.076+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:19:11.076+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:19:15.675+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 6 次任务，当前时间：Thu, 27 Mar 2025 18:19:15 CST"}
+{"level":"info","timestamp":"2025-03-27T18:19:15.717+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662699\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:15.718+0800","caller":"logic/get_new_at_message.go:68","msg":"id:1076763695 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:15.718+0800","caller":"logic/get_new_at_message.go:70","msg":"Not botId,id:1076763695"}
+{"level":"info","timestamp":"2025-03-27T18:19:15.719+0800","caller":"logic/get_new_at_message.go:68","msg":"id:1076763695 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:15.719+0800","caller":"logic/get_new_at_message.go:70","msg":"Not botId,id:1076763695"}
+{"level":"info","timestamp":"2025-03-27T18:19:20.668+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 7 次任务，当前时间：Thu, 27 Mar 2025 18:19:20 CST"}
+{"level":"info","timestamp":"2025-03-27T18:19:20.740+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662699\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:25.682+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 8 次任务，当前时间：Thu, 27 Mar 2025 18:19:25 CST"}
+{"level":"info","timestamp":"2025-03-27T18:19:25.765+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662699\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:30.671+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 9 次任务，当前时间：Thu, 27 Mar 2025 18:19:30 CST"}
+{"level":"info","timestamp":"2025-03-27T18:19:30.738+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662699\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:35.675+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 10 次任务，当前时间：Thu, 27 Mar 2025 18:19:35 CST"}
+{"level":"info","timestamp":"2025-03-27T18:19:35.719+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662699\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:35.719+0800","caller":"ticker/ticker.go:33","msg":"已达到最大执行次数，退出程序。"}
+{"level":"info","timestamp":"2025-03-27T18:19:40.310+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:19:40.317+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:19:40.317+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:19:40.335+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:19:45.341+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:19:45 CST"}
+{"level":"info","timestamp":"2025-03-27T18:19:45.437+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662702\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:50.348+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:19:50 CST"}
+{"level":"info","timestamp":"2025-03-27T18:19:50.423+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662702\n"}
+{"level":"info","timestamp":"2025-03-27T18:19:55.342+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:19:55 CST"}
+{"level":"info","timestamp":"2025-03-27T18:19:55.391+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662702\n"}
+{"level":"info","timestamp":"2025-03-27T18:20:00.337+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 18:20:00 CST"}
+{"level":"info","timestamp":"2025-03-27T18:20:00.419+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662702\n"}
+{"level":"info","timestamp":"2025-03-27T18:20:05.339+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 18:20:05 CST"}
+{"level":"info","timestamp":"2025-03-27T18:20:05.446+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662702\n"}
+{"level":"info","timestamp":"2025-03-27T18:20:10.349+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 6 次任务，当前时间：Thu, 27 Mar 2025 18:20:10 CST"}
+{"level":"info","timestamp":"2025-03-27T18:20:10.426+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662702\n"}
+{"level":"info","timestamp":"2025-03-27T18:20:15.350+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 7 次任务，当前时间：Thu, 27 Mar 2025 18:20:15 CST"}
+{"level":"info","timestamp":"2025-03-27T18:20:15.452+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662702\n"}
+{"level":"info","timestamp":"2025-03-27T18:21:46.962+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:21:46.969+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:21:46.969+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:21:46.984+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:21:51.991+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:21:51 CST"}
+{"level":"error","timestamp":"2025-03-27T18:21:51.992+0800","caller":"service/get_group_msg_history.go:28","msg":"Post \"http://localhost:3000/get_group_msg_history\": EOF","stacktrace":"qq_bot/service.GetGroupMsgHistory\n\tE:/文档/It's MyGO/qqbot/service/get_group_msg_history.go:28\nqq_bot/logic.GetNewAtMessage\n\tE:/文档/It's MyGO/qqbot/logic/get_new_at_message.go:15\nqq_bot/utils/ticker.Ticker\n\tE:/文档/It's MyGO/qqbot/utils/ticker/ticker.go:26\nmain.main\n\tE:/文档/It's MyGO/qqbot/main.go:52\nruntime.main\n\tE:/ENV/Go/src/runtime/proc.go:271"}
+{"level":"error","timestamp":"2025-03-27T18:21:51.992+0800","caller":"logic/get_new_at_message.go:19","msg":"Post \"http://localhost:3000/get_group_msg_history\": EOF","stacktrace":"qq_bot/logic.GetNewAtMessage\n\tE:/文档/It's MyGO/qqbot/logic/get_new_at_message.go:19\nqq_bot/utils/ticker.Ticker\n\tE:/文档/It's MyGO/qqbot/utils/ticker/ticker.go:26\nmain.main\n\tE:/文档/It's MyGO/qqbot/main.go:52\nruntime.main\n\tE:/ENV/Go/src/runtime/proc.go:271"}
+{"level":"error","timestamp":"2025-03-27T18:21:51.993+0800","caller":"ticker/ticker.go:28","msg":"Post \"http://localhost:3000/get_group_msg_history\": EOF","stacktrace":"qq_bot/utils/ticker.Ticker\n\tE:/文档/It's MyGO/qqbot/utils/ticker/ticker.go:28\nmain.main\n\tE:/文档/It's MyGO/qqbot/main.go:52\nruntime.main\n\tE:/ENV/Go/src/runtime/proc.go:271"}
+{"level":"info","timestamp":"2025-03-27T18:21:59.672+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:21:59.679+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:21:59.679+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:21:59.695+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:22:04.701+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:22:04 CST"}
+{"level":"info","timestamp":"2025-03-27T18:22:04.793+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662703\n"}
+{"level":"info","timestamp":"2025-03-27T18:22:09.702+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:22:09 CST"}
+{"level":"info","timestamp":"2025-03-27T18:22:09.809+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662704\n"}
+{"level":"info","timestamp":"2025-03-27T18:22:09.809+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:22:09.809+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:22:14.703+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:22:14 CST"}
+{"level":"info","timestamp":"2025-03-27T18:22:14.779+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662705\n"}
+{"level":"info","timestamp":"2025-03-27T18:22:14.779+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:22:14.779+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:22:15.129+0800","caller":"logic/get_new_at_message.go:68","msg":"id:1076763695 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:22:15.129+0800","caller":"logic/get_new_at_message.go:70","msg":"Not botId,id:1076763695"}
+{"level":"info","timestamp":"2025-03-27T18:23:07.919+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:23:07.926+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:23:07.926+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:23:07.944+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:23:12.958+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:23:12 CST"}
+{"level":"info","timestamp":"2025-03-27T18:23:13.015+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662707\n"}
+{"level":"info","timestamp":"2025-03-27T18:23:17.958+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:23:17 CST"}
+{"level":"info","timestamp":"2025-03-27T18:23:18.034+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662708\n"}
+{"level":"info","timestamp":"2025-03-27T18:23:18.034+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T18:23:18.035+0800","caller":"logic/parse_cmd.go:21","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T18:23:22.945+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:23:22 CST"}
+{"level":"info","timestamp":"2025-03-27T18:23:23.003+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662709\n"}
+{"level":"info","timestamp":"2025-03-27T18:23:23.003+0800","caller":"logic/get_new_at_message.go:68","msg":"id:1076763695 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:23:23.003+0800","caller":"logic/get_new_at_message.go:70","msg":"Not botId,id:1076763695"}
+{"level":"info","timestamp":"2025-03-27T18:23:27.950+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 18:23:27 CST"}
+{"level":"info","timestamp":"2025-03-27T18:23:28.045+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662710\n"}
+{"level":"info","timestamp":"2025-03-27T18:23:32.954+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 18:23:32 CST"}
+{"level":"info","timestamp":"2025-03-27T18:23:33.044+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662710\n"}
+{"level":"info","timestamp":"2025-03-27T18:26:30.660+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:26:30.667+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:26:30.667+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:26:30.683+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:26:35.694+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:26:35 CST"}
+{"level":"info","timestamp":"2025-03-27T18:26:35.765+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662736\n"}
+{"level":"info","timestamp":"2025-03-27T18:26:40.691+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:26:40 CST"}
+{"level":"info","timestamp":"2025-03-27T18:26:40.796+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662738\n"}
+{"level":"info","timestamp":"2025-03-27T18:26:40.796+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:26:45.688+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:26:45 CST"}
+{"level":"info","timestamp":"2025-03-27T18:26:45.762+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662738\n"}
+{"level":"info","timestamp":"2025-03-27T18:26:50.694+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 18:26:50 CST"}
+{"level":"info","timestamp":"2025-03-27T18:26:50.755+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662738\n"}
+{"level":"info","timestamp":"2025-03-27T18:26:55.693+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 18:26:55 CST"}
+{"level":"info","timestamp":"2025-03-27T18:26:55.769+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662738\n"}
+{"level":"info","timestamp":"2025-03-27T18:31:57.177+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T18:31:57.184+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:(*int64)(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T18:31:57.184+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T18:31:57.200+0800","caller":"qqbot/main.go:50","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T18:32:02.204+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 18:32:02 CST"}
+{"level":"info","timestamp":"2025-03-27T18:32:02.278+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662743\n"}
+{"level":"info","timestamp":"2025-03-27T18:32:07.207+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 18:32:07 CST"}
+{"level":"info","timestamp":"2025-03-27T18:32:07.291+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662743\n"}
+{"level":"info","timestamp":"2025-03-27T18:32:12.204+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 18:32:12 CST"}
+{"level":"info","timestamp":"2025-03-27T18:32:12.272+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662743\n"}
+{"level":"info","timestamp":"2025-03-27T18:32:17.200+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 18:32:17 CST"}
+{"level":"info","timestamp":"2025-03-27T18:32:17.337+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662744\n"}
+{"level":"info","timestamp":"2025-03-27T18:32:17.338+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T18:32:22.200+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 18:32:22 CST"}
+{"level":"info","timestamp":"2025-03-27T18:32:22.282+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662744\n"}
+{"level":"info","timestamp":"2025-03-27T18:32:27.205+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 6 次任务，当前时间：Thu, 27 Mar 2025 18:32:27 CST"}
+{"level":"info","timestamp":"2025-03-27T18:32:27.287+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662744\n"}
+{"level":"info","timestamp":"2025-03-27T18:32:32.211+0800","caller":"ticker/ticker.go:25","msg":"Ticker 触发第 7 次任务，当前时间：Thu, 27 Mar 2025 18:32:32 CST"}
+{"level":"info","timestamp":"2025-03-27T18:32:32.313+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662744\n"}
+{"level":"info","timestamp":"2025-03-27T19:09:52.183+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T19:09:52.190+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:[]int64(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T19:09:52.190+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T19:09:52.205+0800","caller":"qqbot/main.go:51","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T19:11:06.972+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T19:11:06.979+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:[]int64(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T19:11:06.979+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T19:11:06.995+0800","caller":"qqbot/main.go:51","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T19:11:12.009+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 19:11:12 CST"}
+{"level":"info","timestamp":"2025-03-27T19:11:12.084+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662802\n"}
+{"level":"info","timestamp":"2025-03-27T19:11:17.004+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 19:11:17 CST"}
+{"level":"info","timestamp":"2025-03-27T19:11:17.041+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662802\n"}
+{"level":"info","timestamp":"2025-03-27T19:11:22.001+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 3 次任务，当前时间：Thu, 27 Mar 2025 19:11:22 CST"}
+{"level":"info","timestamp":"2025-03-27T19:11:22.077+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662802\n"}
+{"level":"info","timestamp":"2025-03-27T19:11:27.003+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 4 次任务，当前时间：Thu, 27 Mar 2025 19:11:27 CST"}
+{"level":"info","timestamp":"2025-03-27T19:11:27.062+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662802\n"}
+{"level":"info","timestamp":"2025-03-27T19:11:32.010+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 5 次任务，当前时间：Thu, 27 Mar 2025 19:11:32 CST"}
+{"level":"info","timestamp":"2025-03-27T19:11:32.045+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662803\n"}
+{"level":"info","timestamp":"2025-03-27T19:11:32.045+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T19:11:32.045+0800","caller":"logic/parse_cmd.go:20","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T19:11:37.006+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 6 次任务，当前时间：Thu, 27 Mar 2025 19:11:37 CST"}
+{"level":"info","timestamp":"2025-03-27T19:11:37.040+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662805\n"}
+{"level":"info","timestamp":"2025-03-27T19:11:37.040+0800","caller":"logic/get_new_at_message.go:68","msg":"id:1076763695 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T19:11:37.041+0800","caller":"logic/get_new_at_message.go:70","msg":"Not botId,id:1076763695"}
+{"level":"info","timestamp":"2025-03-27T19:11:41.995+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 7 次任务，当前时间：Thu, 27 Mar 2025 19:11:41 CST"}
+{"level":"info","timestamp":"2025-03-27T19:11:42.077+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662805\n"}
+{"level":"info","timestamp":"2025-03-27T19:11:47.002+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 8 次任务，当前时间：Thu, 27 Mar 2025 19:11:47 CST"}
+{"level":"info","timestamp":"2025-03-27T19:11:47.079+0800","caller":"logic/get_new_at_message.go:37","msg":"Message is already latest NewLatestSeq: 662805\n"}
+{"level":"info","timestamp":"2025-03-27T19:11:52.004+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 9 次任务，当前时间：Thu, 27 Mar 2025 19:11:52 CST"}
+{"level":"info","timestamp":"2025-03-27T19:11:52.040+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662806\n"}
+{"level":"info","timestamp":"2025-03-27T19:11:52.041+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"info","timestamp":"2025-03-27T19:15:24.874+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T19:15:24.882+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:[]int64(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T19:15:24.882+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T19:15:24.897+0800","caller":"qqbot/main.go:51","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T19:15:24.897+0800","caller":"qqbot/main.go:56","msg":"1"}
+{"level":"info","timestamp":"2025-03-27T19:15:29.903+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 19:15:29 CST"}
+{"level":"info","timestamp":"2025-03-27T19:15:29.991+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662817\n"}
+{"level":"info","timestamp":"2025-03-27T19:15:55.099+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T19:15:55.106+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:[]int64(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T19:15:55.107+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T19:15:55.122+0800","caller":"qqbot/main.go:51","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T19:16:00.130+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 1 次任务，当前时间：Thu, 27 Mar 2025 19:16:00 CST"}
+{"level":"info","timestamp":"2025-03-27T19:16:00.224+0800","caller":"logic/get_new_at_message.go:32","msg":"LatestSeq init successfully! NewLatestSeq: 662817\n"}
+{"level":"info","timestamp":"2025-03-27T19:16:05.137+0800","caller":"ticker/ticker.go:28","msg":"Ticker 触发第 2 次任务，当前时间：Thu, 27 Mar 2025 19:16:05 CST"}
+{"level":"info","timestamp":"2025-03-27T19:16:05.189+0800","caller":"logic/get_new_at_message.go:44","msg":"MessageSeq Update! NewLatestSeq: 662818\n"}
+{"level":"info","timestamp":"2025-03-27T19:16:05.189+0800","caller":"logic/get_new_at_message.go:68","msg":"id:2642865714 userId:2642865714\n"}
+{"level":"warn","timestamp":"2025-03-27T19:16:05.189+0800","caller":"logic/parse_cmd.go:20","msg":"Arg error: <nil>"}
+{"level":"info","timestamp":"2025-03-27T19:28:20.833+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T19:28:20.840+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:[]int64(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T19:28:20.840+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T19:28:20.859+0800","caller":"qqbot/main.go:52","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T19:28:35.091+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T19:28:35.098+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:[]int64(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T19:28:35.098+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T19:28:35.113+0800","caller":"qqbot/main.go:52","msg":"userid get succcess! userid: 2642865714"}
+{"level":"info","timestamp":"2025-03-27T19:30:07.249+0800","caller":"zap/zap_init.go:49","msg":"logger init success"}
+{"level":"info","timestamp":"2025-03-27T19:30:07.256+0800","caller":"conf/conf.go:40","msg":"conf.Config{Address:\"http://localhost:3000/\", GroupID:[]int64(nil), UserID:(*int64)(nil)}"}
+{"level":"info","timestamp":"2025-03-27T19:30:07.256+0800","caller":"conf/conf.go:41","msg":"config init success"}
+{"level":"info","timestamp":"2025-03-27T19:30:07.272+0800","caller":"qqbot/main.go:52","msg":"userid get succcess! userid: 2642865714"}

@@ -11,9 +11,9 @@ import (
 	"strconv"
 )
 
-func GetNewAtMessage(client *http.Client, LatestSeq int64) (err error, NewLatestSeq int64) {
+func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq int64) (err error, NewLatestSeq int64) {
 	err, resp := ser.GetGroupMsgHistory(client, &model.GetGroupMsgHistoryReq{
-		GroupID: *conf.Cfg.GroupID,
+		GroupID: group_id,
 	})
 	if err != nil {
 		zaplog.Logger.Error(err.Error())
@@ -47,8 +47,9 @@ func GetNewAtMessage(client *http.Client, LatestSeq int64) (err error, NewLatest
 
 	//遍历未读消息
 	for i, msg := range resp.Data.Messages {
+		userID := msg.UserID
 		//如果消息是未读
-		if int64(i) >= StartIndex {
+		if int64(i) > StartIndex {
 			for index, singleSlice := range msg.Message {
 
 				if index == 0 {
@@ -76,7 +77,7 @@ func GetNewAtMessage(client *http.Client, LatestSeq int64) (err error, NewLatest
 						data := model.TextData{}
 						d := singleSlice.Data.(map[string]interface{})
 						data.Text = d["text"].(string)
-						err = ParseCmd(client, data)
+						err = ParseCmd(client, group_id, userID, data)
 						if err != nil {
 							return err, NewLatestSeq
 						}

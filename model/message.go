@@ -48,7 +48,7 @@ type FaceData struct {
 }
 
 type AtData struct {
-	QQ   int    `json:"qq"`
+	QQ   int64  `json:"qq"`
 	Name string `json:"name"`
 }
 

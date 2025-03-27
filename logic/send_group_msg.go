@@ -2,21 +2,27 @@ package logic
 
 import (
 	"net/http"
-	"qq_bot/conf"
 	"qq_bot/model"
 	"qq_bot/service"
 	zaplog "qq_bot/utils/zap"
 )
 
-func SendGroupMsg(client *http.Client, text string) (err error) {
+func SendGroupMsg(client *http.Client, group_id int64, userID int64, text string) (err error) {
 
 	err, _ = service.SendGroupMsg(client, &model.SendGroupMsgReq{
-		GroupID: *conf.Cfg.GroupID,
+		GroupID: group_id,
 		Message: []model.MessageContent{
+			{
+				Type: "at",
+				Data: model.AtData{
+					QQ:   userID,
+					Name: "",
+				},
+			},
 			{
 				Type: "text",
 				Data: model.TextData{
-					Text: text,
+					Text: " " + text,
 				},
 			},
 		},

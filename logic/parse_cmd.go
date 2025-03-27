@@ -1,8 +1,8 @@
 package logic
 
 import (
+	"fmt"
 	"net/http"
-	"qq_bot/cmd"
 	"qq_bot/global"
 	"qq_bot/model"
 	zaplog "qq_bot/utils/zap"
@@ -10,25 +10,29 @@ import (
 	"strings"
 )
 
-func ParseCmd(client *http.Client, data model.TextData) (err error) {
+// 解析指令
+func ParseCmd(client *http.Client, group_id int64, userID int64, data model.TextData) (err error) {
 	data.Text = strings.TrimSpace(data.Text)
 	dataSlice := strings.Split(data.Text, " ")
 
 	switch dataSlice[0] {
 	case "jm":
+		if len(dataSlice) < 2 {
+			zaplog.Logger.Warnf("Arg error: %v", err)
+			_ = SendGroupMsg(client, group_id, userID, fmt.Sprintf("jm%s\n%s", global.ErrCmdArgFault, global.ErrCmdJmHelp))
+			return nil
+		}
 		num, err := strconv.ParseInt(dataSlice[1], 10, 64)
 		if err != nil {
-			zaplog.Logger.Warnf("Arg error: %v", err)
-			_ = SendGroupMsg(client, global.ErrCmdArgFault)
-			return err
+			zaplog.Logger.Warnf("Arg parse error: %v", err)
+			_ = SendGroupMsg(client, group_id, userID, fmt.Sprintf("jm%s\n%s", global.ErrCmdArgFault, global.ErrCmdJmHelp))
+			return nil
 		}
-		if err = cmd.CmdJm(num); err != nil {
-			zaplog.Logger.Fatalf("CmdJm error: %v", err)
-			_ = SendGroupMsg(client, global.ErrCmdJmUnknownFault)
-			return err
-		}
+		_ = SendGroupMsg(client, group_id, userID, global.InfoCmdJmFindingBook+strconv.FormatInt(num, 10))
+		global.ChanToJm <- num
+
 	default:
-		if err = SendGroupMsg(client, global.ErrCmdNotFound); err != nil {
+		if err = SendGroupMsg(client, group_id, userID, fmt.Sprintf("%s\n%s", global.ErrCmdNotFound, global.ErrCmdMenu)); err != nil {
 			return err
 		}
 	}

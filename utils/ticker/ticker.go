@@ -1,15 +1,18 @@
 package ticker
 
 import (
+	"context"
 	"net/http"
+	"qq_bot/global"
 	"qq_bot/logic"
 	zaplog "qq_bot/utils/zap"
 	"time"
 )
 
-func Ticker(durration time.Duration, maxCount int, client *http.Client, seq int64) (err error) {
-	ticker := time.NewTicker(durration)
+func Ticker(duration time.Duration, ctx context.Context, maxCount int, client *http.Client, group_id int64, seq int64) (err error) {
+	ticker := time.NewTicker(duration)
 	defer ticker.Stop() // 确保在程序结束时停止 Ticker
+	defer global.Wg.Done()
 
 	// 使用一个通道来接收 Ticker 触发的事件
 	tickerChan := ticker.C
@@ -23,16 +26,20 @@ func Ticker(durration time.Duration, maxCount int, client *http.Client, seq int6
 		case <-tickerChan:
 			count++
 			zaplog.Logger.Infof("Ticker 触发第 %d 次任务，当前时间：%s", count, time.Now().Format(time.RFC1123))
-			err, seq = logic.GetNewAtMessage(client, seq)
+			err, seq = logic.GetNewAtMessage(client, group_id, seq)
 			if err != nil {
 				zaplog.Logger.Error(err)
 				return
 			}
 			// 如果达到最大执行次数，退出循环
-			if count >= maxCount {
+			if count == maxCount {
 				zaplog.Logger.Infof("已达到最大执行次数，退出程序。")
 				return
 			}
+		case <-ctx.Done():
+			return
+
 		}
 	}
+
 }
