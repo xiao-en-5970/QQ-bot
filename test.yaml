@@ -1,0 +1,6 @@
+# qq api请求地址
+address: "http://localhost:3000/"
+# 要监听的群号
+group_id:
+# qqbot用户id，为空则自动获得
+user_id:
