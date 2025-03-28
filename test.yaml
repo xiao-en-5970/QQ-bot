@@ -2,8 +2,6 @@
 address: "http://localhost:3000/"
 # 要监听的群号，为空则从命令行获取
 group_id:
-  - 1006311476
-  - 977793941
-  - 765572686
+
 # qqbot用户id，为空则自动获得
 user_id:

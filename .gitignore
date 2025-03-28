@@ -1,6 +1,5 @@
-.venv
+pdftmp/
+tmp/
+.idea/
+.venv/
 *.log
-tmp
-pdftmp
-.idea
-.git
