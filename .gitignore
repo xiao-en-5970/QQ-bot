@@ -1,5 +1,5 @@
 .venv/
-zap.log
+*.log
 tmp/
 pdftmp/
 .idea/

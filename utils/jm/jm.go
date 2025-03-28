@@ -2,6 +2,7 @@ package jm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -39,24 +40,24 @@ func Jmcomic(ctx context.Context) {
 				output, err := cmd.CombinedOutput()
 				if err != nil {
 					zaplog.Logger.Warnf("执行命令时发生错误/中途退出: %v\n", err)
-
+					_ = logic.SendGroupMsg(client, chanRecv.GroupID, chanRecv.UserID, global.ErrCmdJmUnknownFault)
+					continue
 				}
 				var builder strings.Builder
 				builder.Write(output)
 
 				zaplog.Logger.Infof("命令输出结果:%s", builder.String())
-				////如果调用jm接口没报错
-				//if !strings.HasPrefix(builder.String(), "Exception") {
-				//
-				//
-				//} else {
-				//	zaplog.Logger.Warn(errors.New("jm cmd exec failed"))
-				//	logic.SendGroupMsg(client, chanRecv.GroupID, chanRecv.UserID, global.ErrCmdJmUnknownFault)
-				//}
+				//如果调用jm接口没报错
+				if strings.HasPrefix(builder.String(), "Exception") {
+					zaplog.Logger.Warn(errors.New("jm cmd exec failed"))
+					//logic.SendGroupMsg(client, chanRecv.GroupID, chanRecv.UserID, global.ErrCmdJmUnknownFault)
+
+				}
+
 				err = to_pdf.ToPdf(fmt.Sprintf("./tmp/%d/%d", chanRecv.Number, chanRecv.Chapter), fmt.Sprintf("./pdftmp/%d_%d.pdf", chanRecv.Number, chanRecv.Chapter))
 				if err != nil {
 					zaplog.Logger.Warn(err)
-
+					_ = logic.SendGroupMsg(client, chanRecv.GroupID, chanRecv.UserID, global.ErrCmdJmNotFound)
 				}
 				err = logic.UploadGroupFile(client, chanRecv.GroupID, fmt.Sprintf("./pdftmp/%d_%d.pdf", chanRecv.Number, chanRecv.Chapter), fmt.Sprintf("%d_%d.pdf", chanRecv.Number, chanRecv.Chapter))
 				if err != nil {

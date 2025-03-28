@@ -23,6 +23,7 @@ func ToPdf(sourceDir string, destFile string) (err error) {
 	output, err := cmd.CombinedOutput()
 	zaplog.Logger.Infof("命令输出结果:%s", output)
 	if err != nil {
+
 		zaplog.Logger.Error(err)
 		return err
 	}

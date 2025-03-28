@@ -58,7 +58,7 @@ func main() {
 	go wait_exit.WaitExit(cancel)
 	go jm.Jmcomic(ctx)
 	for _, groupID := range conf.Cfg.GroupID {
-		go ticker.Ticker(10*time.Second, ctx, -1, client, groupID)
+		go ticker.Ticker(3*time.Second, ctx, -1, &http.Client{}, groupID)
 	}
 	global.Wg.Wait()
 	defer close(global.ChanToJm)

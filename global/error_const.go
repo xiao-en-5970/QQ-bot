@@ -15,10 +15,12 @@ const (
 	//jm错误
 	ErrCmdJmHelp         = "例：@bot jm 123456 2\n(番号123456的第2章)"
 	ErrCmdJmUnknownFault = "jm" + ErrCmdUnknownFault
+	ErrCmdJmNotFound     = "未查找到番号对应的本子..."
+
 	InfoCmdJmFindingBook = "...正在查找本子"
 )
 
 var (
-	ChanToJm = make(chan model.ChanToJM, 5)
+	ChanToJm = make(chan model.ChanToJM, 10)
 	Wg       sync.WaitGroup
 )
