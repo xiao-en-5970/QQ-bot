@@ -60,7 +60,7 @@ func FindCache(filePath string) (err error, exist bool) {
 
 	// 判断文件是否存在
 	if os.IsNotExist(err) {
-		zaplog.Logger.Debug("文件不存在")
+		zaplog.Logger.Debugf("缓存未命中[%s]", filePath)
 		return nil, false
 	} else if err != nil {
 		// 其他错误
@@ -68,7 +68,7 @@ func FindCache(filePath string) (err error, exist bool) {
 		return err, false
 	} else {
 		// 文件存在
-		zaplog.Logger.Debug("文件存在")
+		zaplog.Logger.Debugf("缓存命中[%s]", filePath)
 		return nil, true
 	}
 }

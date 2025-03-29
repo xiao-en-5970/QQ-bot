@@ -18,9 +18,12 @@ const (
 	ErrCmdJmNotFound     = "未查找到番号对应的本子..."
 
 	InfoCmdJmFindingBook = "...正在查找本子"
+
+	//github 打印
+	InfoCmdGithubPrint = "项目已开源：https://github.com/xiao-en-5970/QQ-bot"
 )
 
 var (
-	ChanToJm = make(chan model.ChanToJM, 10)
-	Wg       sync.WaitGroup
+	ChanToParseCmd = make(chan model.ChanToParseCmd, 15)
+	Wg             sync.WaitGroup
 )

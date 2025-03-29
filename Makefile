@@ -12,3 +12,6 @@ clean:
 	rm -f -r ./tmp/
 	rm -f -r ./pdftmp/
 PHONY: all run tidy clean
+
+build:tidy
+	go build -o ./build/main.exe main.go

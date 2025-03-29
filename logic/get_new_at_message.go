@@ -34,7 +34,7 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 	}
 	//如果没有未读消息，则返回
 	if *LatestSeq == resp.Data.Messages[length-1].MessageSeq {
-		zaplog.Logger.Debugf("消息已经为最新消息 LatestSeq: %d GroupID:%v", *LatestSeq, group_id)
+		//zaplog.Logger.Debugf("消息已经为最新消息 LatestSeq: %d GroupID:%v", *LatestSeq, group_id)
 		return nil
 	}
 	//遍历未读消息
@@ -76,10 +76,13 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 						d := singleSlice.Data.(map[string]interface{})
 						data.Text = d["text"].(string)
 						zaplog.Logger.Debugf("data.Text:%v", data.Text)
-						err = ParseCmd(client, group_id, userID, data)
-						if err != nil {
-							return err
+						global.ChanToParseCmd <- model.ChanToParseCmd{
+							GroupID: group_id,
+							UserID:  userID,
+							Data:    data,
 						}
+						zaplog.Logger.Debugf("global.ChanToJm <-，%#v", len(global.ChanToParseCmd))
+
 					} else {
 						zaplog.Logger.Debugln("return menu")
 						_ = SendGroupMsg(client, group_id, userID, global.ErrCmdArgFault)

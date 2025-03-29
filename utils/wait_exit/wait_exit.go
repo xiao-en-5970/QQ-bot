@@ -12,6 +12,7 @@ import (
 
 func WaitExit(cancel context.CancelFunc) {
 	defer global.Wg.Done()
+	zaplog.Logger.Infof("协程WaitExit启动")
 	defer zaplog.Logger.Infof("协程WaitExit退出")
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)

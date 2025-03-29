@@ -1,5 +1,5 @@
 #输出到标准输出的log等级(debug/info/warn/error)
-std_out_log_level: info
+std_out_log_level: debug
 # qq api请求地址
 address: "http://localhost:3000/"
 # 要监听的群号，为空则从群聊列表or命令行获取

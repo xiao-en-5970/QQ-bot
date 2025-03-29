@@ -15,6 +15,7 @@ func Ticker(duration time.Duration, ctx context.Context, maxCount int, client *h
 	ticker := time.NewTicker(duration)
 	defer ticker.Stop() // 确保在程序结束时停止 Ticker
 	defer global.Wg.Done()
+	zaplog.Logger.Infof("协程Ticker(GroupID:%d)启动", group_id)
 	defer zaplog.Logger.Infof("协程Ticker(GroupID:%d)退出", group_id)
 
 	// 使用一个通道来接收 Ticker 触发的事件
@@ -28,7 +29,7 @@ func Ticker(duration time.Duration, ctx context.Context, maxCount int, client *h
 		select {
 		case <-tickerChan:
 			count++
-			zaplog.Logger.Debugf("Ticker 触发第 %d 次任务，当前时间：%s", count, time.Now().Format(time.RFC1123))
+			//zaplog.Logger.Debugf("Ticker 触发第 %d 次任务，当前时间：%s", count, time.Now().Format(time.RFC1123))
 
 			err = logic.GetNewAtMessage(client, group_id, &seq)
 			if seq == 0 {

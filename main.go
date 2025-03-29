@@ -6,8 +6,8 @@ import (
 	"qq_bot/conf"
 	"qq_bot/global"
 	"qq_bot/logic"
+	"qq_bot/utils/cmd"
 	"qq_bot/utils/cmdline"
-	"qq_bot/utils/jm"
 	"qq_bot/utils/ticker"
 	"qq_bot/utils/wait_exit"
 	zaplog "qq_bot/utils/zap"
@@ -64,12 +64,12 @@ func main() {
 	global.Wg.Add(2)
 	global.Wg.Add(len(conf.Cfg.GroupID))
 	go wait_exit.WaitExit(cancel)
-	go jm.Jmcomic(ctx)
+	go cmd.ParseCmd(ctx)
 	for _, groupID := range conf.Cfg.GroupID {
 		go ticker.Ticker(time.Duration(conf.Cfg.IntervalTime)*time.Second, ctx, -1, &http.Client{}, groupID)
 	}
 	global.Wg.Wait()
-	defer close(global.ChanToJm)
+	defer close(global.ChanToParseCmd)
 	defer client.CloseIdleConnections()
 	defer zaplog.Logger.Sync()
 	defer zaplog.LogFile.Close()
