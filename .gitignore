@@ -2,4 +2,4 @@ pdftmp/
 tmp/
 .idea/
 .venv/
-zap.log
+*.log

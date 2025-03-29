@@ -25,11 +25,12 @@ var (
 func main() {
 	// 创建客户端
 	client := &http.Client{}
-	//初始化日志
-	zaplog.Init()
+
 	//初始化viper读数据
 	conf.Init()
-
+	//初始化日志
+	zaplog.Init(conf.Cfg.StdOutLogLevel)
+	//如果未指定用户名，则自动获取
 	if conf.Cfg.UserID == nil {
 		if err, userid = logic.GetUserId(client); err != nil {
 			panic(err)
@@ -37,19 +38,26 @@ func main() {
 		}
 		conf.Cfg.UserID = &userid
 	}
+	//如果未指定群号，则从命令行中获取
 	if conf.Cfg.GroupID == nil {
 		err, groupid = cmdline.GetCmdLine()
 		if err != nil {
-			zaplog.Logger.Fatalf("Cant find groupID , err:%v", err)
+			zaplog.Logger.Warnf("未能从命令行找到群号，即将从账号中自动搜索 , err:%v", err)
+		} else {
+			conf.Cfg.GroupID = append(conf.Cfg.GroupID, groupid)
+		}
+	}
+	//如果命令行获取不到，则从账户中获取全部群号
+	if conf.Cfg.GroupID == nil {
+		err, conf.Cfg.GroupID = logic.GetGroupList(client, false)
+		if err != nil {
+			//获取群聊列表失败
+			zaplog.Logger.Errorf("Cant find groupID list , err:%v", err)
 			panic(err)
 		}
-		conf.Cfg.GroupID = append(conf.Cfg.GroupID, groupid)
-	}
-
-	if err != nil {
-		panic(err)
 	}
 	zaplog.Logger.Infof("userid get succcess! userid: %d", *conf.Cfg.UserID)
+	zaplog.Logger.Infof("groupid get success! %#v", conf.Cfg.GroupID)
 	//获取ctx
 	ctx, cancel := context.WithCancel(context.Background())
 

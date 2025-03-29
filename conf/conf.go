@@ -1,17 +1,18 @@
 package conf
 
 import (
+	"errors"
+	"fmt"
 	"github.com/spf13/viper"
-	zaplog "qq_bot/utils/zap"
 )
 
 var Cfg Config
 
 type Config struct {
-	Address string `mapstructure:"address"`
-
-	GroupID []int64 `mapstructure:"group_id,omitempty"`
-	UserID  *int64  `mapstructure:"user_id,omitempty"`
+	Address        string  `mapstructure:"address"`
+	GroupID        []int64 `mapstructure:"group_id,omitempty"`
+	UserID         *int64  `mapstructure:"user_id,omitempty"`
+	StdOutLogLevel string  `mapstructure:"std_out_log_level"`
 }
 
 func Init() (err error) {
@@ -24,20 +25,19 @@ func Init() (err error) {
 	// viper.AddConfigPath("$HOME/.myapp")
 
 	// 读取配置文件
-	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			zaplog.Logger.Fatalf("配置文件未找到: %v", err)
-		} else {
-			zaplog.Logger.Fatalf("读取配置文件时出错: %v", err)
+	if err = viper.ReadInConfig(); err != nil {
+		var configFileNotFoundError viper.ConfigFileNotFoundError
+		if errors.As(err, &configFileNotFoundError) {
+			return errors.New(fmt.Sprintf("配置文件未找到: %v", err))
 		}
 	}
 
 	// 将配置文件内容映射到 Config 结构体
 
 	if err := viper.Unmarshal(&Cfg); err != nil {
-		zaplog.Logger.Fatalf("无法解析配置文件: %v", err)
+
+		return errors.New(fmt.Sprintf("无法解析配置文件: %v", err))
 	}
-	zaplog.Logger.Infof("%#v", Cfg)
-	zaplog.Logger.Info("config init success")
+	
 	return nil
 }

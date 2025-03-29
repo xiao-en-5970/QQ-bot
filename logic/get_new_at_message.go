@@ -29,12 +29,12 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 	//如果第一次查找，则直接以最新未读消息为基准划分未读已读消息
 	if *LatestSeq == 0 {
 		*LatestSeq = resp.Data.Messages[length-1].MessageSeq - 1
-		zaplog.Logger.Infof("LatestSeq init successfully! LatestSeq: %d\n", *LatestSeq)
+		zaplog.Logger.Infof("LatestSeq init successfully! LatestSeq: %d GroupID:%v\n", *LatestSeq, group_id)
 
 	}
 	//如果没有未读消息，则返回
 	if *LatestSeq == resp.Data.Messages[length-1].MessageSeq {
-		zaplog.Logger.Infof("Message is already latest LatestSeq: %d\n", *LatestSeq)
+		zaplog.Logger.Infof("消息已经为最新消息 LatestSeq: %d GroupID:%v\n", *LatestSeq, group_id)
 		return nil
 	}
 	//遍历未读消息
@@ -64,14 +64,14 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 						}
 						zaplog.Logger.Infof("id:%d userId:%d\n", id, *conf.Cfg.UserID)
 						if id != *conf.Cfg.UserID {
-							zaplog.Logger.Infof("Not botId,id:%v", id)
+							zaplog.Logger.Infof("用户%v没有@bot\n", id)
 							break
 						}
 					}
 					//
 				} else if index == 1 {
 					if singleSlice.Type == "text" {
-						zaplog.Logger.Infof("index == 1 && is text \n")
+						zaplog.Logger.Debugf("index == 1 && is text \n")
 						data := model.TextData{}
 						d := singleSlice.Data.(map[string]interface{})
 						data.Text = d["text"].(string)

@@ -1,7 +1,6 @@
 package to_pdf
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +25,7 @@ func ToPdf(sourceDir string, destFile string) (err error) {
 	if err != nil {
 
 		zaplog.Logger.Error(err)
+		_ = os.RemoveAll(destFile)
 		return err
 	}
 
@@ -60,15 +60,15 @@ func FindCache(filePath string) (err error, exist bool) {
 
 	// 判断文件是否存在
 	if os.IsNotExist(err) {
-		fmt.Println("文件不存在")
+		zaplog.Logger.Info("文件不存在")
 		return nil, false
 	} else if err != nil {
 		// 其他错误
-		fmt.Printf("检查文件时出错: %v\n", err)
+		zaplog.Logger.Warnf("检查文件时出错: %v\n", err)
 		return err, false
 	} else {
 		// 文件存在
-		fmt.Println("文件存在")
+		zaplog.Logger.Info("文件存在")
 		return nil, true
 	}
 }

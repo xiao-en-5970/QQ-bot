@@ -11,8 +11,8 @@ import (
 func GetCmdLine() (err error, num int64) {
 	// 检查是否提供了至少一个参数
 	if len(os.Args) < 2 {
-		zaplog.Logger.Fatalf("Usage: go run main.go <int64_value> or add group_id in test.yaml")
-		return errors.New("usage: go run main.go <int64_value> or write group_id in test.yaml"), 0
+		zaplog.Logger.Warnf("命令行参数过少\n")
+		return errors.New("命令行参数过少"), 0
 	}
 	// 获取第一个参数
 	arg := os.Args[1]
@@ -20,7 +20,7 @@ func GetCmdLine() (err error, num int64) {
 	// 将字符串参数转换为int64
 	num, err = strconv.ParseInt(arg, 10, 64)
 	if err != nil {
-		fmt.Printf("Error converting '%s' to int64: %v", arg, err)
+		fmt.Printf("无法转换 '%s' to int64: %v", arg, err)
 		return err, 0
 	}
 	return nil, num

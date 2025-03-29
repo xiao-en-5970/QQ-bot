@@ -9,7 +9,7 @@ import (
 var Logger *zap.SugaredLogger
 var LogFile *os.File
 
-func Init() {
+func Init(stdoutlevel string) {
 	// 打开日志文件
 	LogFile, err := os.OpenFile("zap.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
@@ -33,12 +33,26 @@ func Init() {
 	consoleEncoderConfig.TimeKey = "timestamp"
 	consoleEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	consoleEncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder // 彩色输出
-
+	var level zapcore.Level
+	switch stdoutlevel {
+	case "debug":
+		level = zap.DebugLevel
+	case "info":
+		level = zap.InfoLevel
+	case "warn":
+		level = zap.WarnLevel
+	case "error":
+		level = zap.ErrorLevel
+	case "fatal":
+		level = zap.FatalLevel
+	default:
+		level = zap.WarnLevel
+	}
 	consoleEncoder := zapcore.NewConsoleEncoder(consoleEncoderConfig)
 	consoleCore := zapcore.NewCore(
 		consoleEncoder,
 		zapcore.AddSync(os.Stdout),
-		zap.InfoLevel, // 设置日志级别
+		level, // 设置日志级别
 	)
 
 	// 组合多个核心，实现同时输出到文件和标准输出
