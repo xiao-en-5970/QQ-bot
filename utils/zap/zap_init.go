@@ -60,5 +60,5 @@ func Init(stdoutlevel string) {
 	// 创建 logger
 	l := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
 	Logger = l.Sugar()
-	Logger.Info("logger init success")
+	Logger.Infoln("日志初始化成功")
 }

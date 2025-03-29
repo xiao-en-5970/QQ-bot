@@ -9,7 +9,7 @@ import (
 )
 
 func UploadGroupFile(client *http.Client, group_id int64, file string, name string) (err error) {
-	zaplog.Logger.Infof("正在上传文件%s\n", name)
+	zaplog.Logger.Infof("正在上传文件%s", name)
 	absolutePath, err := filepath.Abs(file)
 	err, _ = service.UploadGroupFile(client, &model.UploadGroupFileReq{
 		GroupID: group_id,
@@ -20,5 +20,6 @@ func UploadGroupFile(client *http.Client, group_id int64, file string, name stri
 		zaplog.Logger.Fatalf("UploadGroupFile failed: %v", err)
 		return err
 	}
+	zaplog.Logger.Infof("%s上传成功", name)
 	return nil
 }

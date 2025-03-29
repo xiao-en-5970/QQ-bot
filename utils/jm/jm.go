@@ -2,7 +2,6 @@ package jm
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -23,7 +22,7 @@ func Jmcomic(ctx context.Context) {
 
 	//fmt.Println(os.Getwd())
 	defer global.Wg.Done()
-	defer zaplog.Logger.Infof("协程Jmcomic退出\n")
+	defer zaplog.Logger.Infof("协程Jmcomic退出")
 	for {
 		select {
 		case <-ctx.Done():
@@ -38,26 +37,26 @@ func Jmcomic(ctx context.Context) {
 						zaplog.Logger.Warn(err)
 					}
 				} else {
-					zaplog.Logger.Infof("<- global.ChanToJm，%#v\n", len(global.ChanToJm))
-					zaplog.Logger.Infof("接收到番号 %d 第 %d 章\n", chanRecv.Number, chanRecv.Chapter)
+					zaplog.Logger.Debugf("<- global.ChanToJm，%#v", len(global.ChanToJm))
+					zaplog.Logger.Infof("接收到番号 %d 第 %d 章", chanRecv.Number, chanRecv.Chapter)
 					if err := to_zip.MkDir("./tmp"); err != nil {
-						zaplog.Logger.Warnf("创建./tmp失败: %v\n", err)
+						zaplog.Logger.Warnf("创建./tmp失败: %v", err)
 					}
 					cmd := exec.Command("./package/jmcomic.exe", fmt.Sprint(chanRecv.Number), fmt.Sprintf("p%d", chanRecv.Chapter), "--option=./package/jmoption/opt.yml")
 					// 运行命令并获取输出结果
 					output, err := cmd.CombinedOutput()
 					if err != nil {
-						zaplog.Logger.Warnf("执行命令时发生错误/中途退出: %v\n", err)
+						zaplog.Logger.Warnf("执行命令时发生错误/中途退出: %v", err)
 						_ = logic.SendGroupMsg(client, chanRecv.GroupID, chanRecv.UserID, global.ErrCmdJmUnknownFault)
 						continue
 					}
 					var builder strings.Builder
 					builder.Write(output)
 
-					zaplog.Logger.Infof("命令输出结果:%s", builder.String())
+					zaplog.Logger.Debugf("命令输出结果:%s", builder.String())
 					//如果调用jm接口没报错
 					if strings.HasPrefix(builder.String(), "Exception") {
-						zaplog.Logger.Warn(errors.New("jm cmd exec failed"))
+						zaplog.Logger.Warnf("jm %d found failed", chanRecv.Number)
 						//logic.SendGroupMsg(client, chanRecv.GroupID, chanRecv.UserID, global.ErrCmdJmUnknownFault)
 
 					}
@@ -71,7 +70,6 @@ func Jmcomic(ctx context.Context) {
 					if err != nil {
 						zaplog.Logger.Warn(err)
 					}
-					zaplog.Logger.Infof("%d_%d.pdf上传成功\n", chanRecv.Number, chanRecv.Chapter)
 
 					//本次不采用转换为zip，因为群u觉得麻烦
 					//err = to_zip.Tozip("./tmp", "./ziptmp", fmt.Sprintf("%d.zip", chanRecv.Number))

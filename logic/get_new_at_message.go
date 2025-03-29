@@ -29,12 +29,12 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 	//如果第一次查找，则直接以最新未读消息为基准划分未读已读消息
 	if *LatestSeq == 0 {
 		*LatestSeq = resp.Data.Messages[length-1].MessageSeq - 1
-		zaplog.Logger.Infof("LatestSeq init successfully! LatestSeq: %d GroupID:%v\n", *LatestSeq, group_id)
+		zaplog.Logger.Debugf("LatestSeq init successfully! LatestSeq: %d GroupID:%v\n", *LatestSeq, group_id)
 
 	}
 	//如果没有未读消息，则返回
 	if *LatestSeq == resp.Data.Messages[length-1].MessageSeq {
-		zaplog.Logger.Infof("消息已经为最新消息 LatestSeq: %d GroupID:%v\n", *LatestSeq, group_id)
+		zaplog.Logger.Debugf("消息已经为最新消息 LatestSeq: %d GroupID:%v", *LatestSeq, group_id)
 		return nil
 	}
 	//遍历未读消息
@@ -50,7 +50,7 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 						break
 					} else {
 						if len(msg.Message) == 1 {
-							zaplog.Logger.Infoln("return menu")
+							zaplog.Logger.Debugln("return menu")
 							_ = SendGroupMsg(client, group_id, userID, global.ErrCmdMenu)
 							break
 						}
@@ -62,26 +62,26 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 							zaplog.Logger.Error(err.Error())
 							return err
 						}
-						zaplog.Logger.Infof("id:%d userId:%d\n", id, *conf.Cfg.UserID)
+						zaplog.Logger.Debugf("id:%d userId:%d", id, *conf.Cfg.UserID)
 						if id != *conf.Cfg.UserID {
-							zaplog.Logger.Infof("用户%v没有@bot\n", id)
+							zaplog.Logger.Debugf("用户%v没有@bot", id)
 							break
 						}
 					}
 					//
 				} else if index == 1 {
 					if singleSlice.Type == "text" {
-						zaplog.Logger.Debugf("index == 1 && is text \n")
+						zaplog.Logger.Debugf("index == 1 && is text ")
 						data := model.TextData{}
 						d := singleSlice.Data.(map[string]interface{})
 						data.Text = d["text"].(string)
-						zaplog.Logger.Infof("data.Text:%v", data.Text)
+						zaplog.Logger.Debugf("data.Text:%v", data.Text)
 						err = ParseCmd(client, group_id, userID, data)
 						if err != nil {
 							return err
 						}
 					} else {
-						zaplog.Logger.Infoln("return menu")
+						zaplog.Logger.Debugln("return menu")
 						_ = SendGroupMsg(client, group_id, userID, global.ErrCmdArgFault)
 
 						break

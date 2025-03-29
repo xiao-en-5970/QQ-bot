@@ -56,11 +56,11 @@ func main() {
 			panic(err)
 		}
 	}
-	zaplog.Logger.Infof("userid get succcess! userid: %d", *conf.Cfg.UserID)
-	zaplog.Logger.Infof("groupid get success! %#v", conf.Cfg.GroupID)
+	zaplog.Logger.Debugf("userid get succcess! userid: %d", *conf.Cfg.UserID)
+	zaplog.Logger.Debugf("groupid get success! %#v", conf.Cfg.GroupID)
 	//获取ctx
+	zaplog.Logger.Infof("配置读取成功")
 	ctx, cancel := context.WithCancel(context.Background())
-
 	global.Wg.Add(2)
 	global.Wg.Add(len(conf.Cfg.GroupID))
 	go wait_exit.WaitExit(cancel)

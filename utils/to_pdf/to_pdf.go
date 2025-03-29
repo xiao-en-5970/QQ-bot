@@ -21,7 +21,7 @@ func ToPdf(sourceDir string, destFile string) (err error) {
 
 	cmd := exec.Command("./package/img2pdf.exe", strSlice...)
 	output, err := cmd.CombinedOutput()
-	zaplog.Logger.Infof("命令输出结果:%s", output)
+	zaplog.Logger.Debugf("命令输出结果:%s", output)
 	if err != nil {
 
 		zaplog.Logger.Error(err)
@@ -60,15 +60,15 @@ func FindCache(filePath string) (err error, exist bool) {
 
 	// 判断文件是否存在
 	if os.IsNotExist(err) {
-		zaplog.Logger.Info("文件不存在")
+		zaplog.Logger.Debug("文件不存在")
 		return nil, false
 	} else if err != nil {
 		// 其他错误
-		zaplog.Logger.Warnf("检查文件时出错: %v\n", err)
+		zaplog.Logger.Warnf("检查文件时出错: %v", err)
 		return err, false
 	} else {
 		// 文件存在
-		zaplog.Logger.Info("文件存在")
+		zaplog.Logger.Debug("文件存在")
 		return nil, true
 	}
 }
