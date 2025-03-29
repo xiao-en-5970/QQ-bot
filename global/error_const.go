@@ -9,7 +9,7 @@ const (
 	//基础错误
 	ErrCmdNotFound     = "无法识别该指令格式"
 	ErrCmdArgFault     = "指令参数错误"
-	ErrCmdMenu         = "当前指令有jm,help"
+	ErrCmdMenu         = "当前指令有:\njm（查找jm本子）,help（指令帮助）,github（查看项目开源）"
 	ErrCmdUnknownFault = "指令未知错误"
 
 	//jm错误

@@ -13,6 +13,7 @@ type Config struct {
 	GroupID        []int64 `mapstructure:"group_id,omitempty"`
 	UserID         *int64  `mapstructure:"user_id,omitempty"`
 	StdOutLogLevel string  `mapstructure:"std_out_log_level"`
+	IntervalTime   int     `mapstructure:"interval_time"`
 }
 
 func Init() (err error) {
@@ -38,6 +39,6 @@ func Init() (err error) {
 
 		return errors.New(fmt.Sprintf("无法解析配置文件: %v", err))
 	}
-	
+
 	return nil
 }

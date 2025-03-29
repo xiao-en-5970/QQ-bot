@@ -28,7 +28,7 @@ func Ticker(duration time.Duration, ctx context.Context, maxCount int, client *h
 		select {
 		case <-tickerChan:
 			count++
-			zaplog.Logger.Infof("Ticker 触发第 %d 次任务，当前时间：%s", count, time.Now().Format(time.RFC1123))
+			zaplog.Logger.Debugf("Ticker 触发第 %d 次任务，当前时间：%s", count, time.Now().Format(time.RFC1123))
 
 			err = logic.GetNewAtMessage(client, group_id, &seq)
 			if seq == 0 {

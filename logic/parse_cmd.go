@@ -40,7 +40,10 @@ func ParseCmd(client *http.Client, group_id int64, userID int64, data model.Text
 		_ = SendGroupMsg(client, group_id, userID, fmt.Sprintf("%s %d 第 %d 章", global.InfoCmdJmFindingBook, num, chapter))
 		global.ChanToJm <- model.ChanToJM{GroupID: group_id, Number: num, Chapter: chapter, UserID: userID}
 		zaplog.Logger.Infof("global.ChanToJm <- ，%#v\n", len(global.ChanToJm))
-
+	case "github":
+		_ = SendGroupMsg(client, group_id, userID, "项目已开源：https://github.com/xiao-en-5970/QQ-bot")
+	case "help":
+		_ = SendGroupMsg(client, group_id, userID, global.ErrCmdMenu)
 	default:
 		if err = SendGroupMsg(client, group_id, userID, fmt.Sprintf("%s\n%s", global.ErrCmdNotFound, global.ErrCmdMenu)); err != nil {
 			return err

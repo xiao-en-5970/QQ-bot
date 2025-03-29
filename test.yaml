@@ -1,4 +1,4 @@
-#输出到标准输出的log等级
+#输出到标准输出的log等级(debug/info/warn/error)
 std_out_log_level: warn
 # qq api请求地址
 address: "http://localhost:3000/"
@@ -6,3 +6,5 @@ address: "http://localhost:3000/"
 group_id:
 # qqbot用户id，为空则自动获得当前bot账号
 user_id:
+# 每几秒进行群消息遍历，间隔越少，bot响应越快，但是消耗资源越多
+interval_time: 5
