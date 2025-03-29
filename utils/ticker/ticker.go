@@ -32,7 +32,7 @@ func Ticker(duration time.Duration, ctx context.Context, maxCount int, client *h
 
 			err = logic.GetNewAtMessage(client, group_id, &seq)
 			if seq == 0 {
-				zaplog.Logger.Warnf(fmt.Sprintf("该群聊消息数量不足，停止该群聊服务.%#v\n", group_id))
+				zaplog.Logger.Warnf(fmt.Sprintf("该群聊消息数量不足，停止该群聊服务.%#v", group_id))
 				return errors.New(fmt.Sprintf("该群聊消息数量不足，停止该群聊服务.%#v", group_id))
 			}
 			if err != nil {

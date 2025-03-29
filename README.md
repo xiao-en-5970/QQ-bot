@@ -23,12 +23,12 @@ group_id:
 user_id:
 ```
 
-### 5.利用Make启动项目
+### 5.启动项目
 ```shell
 # 直接构建
-make run
+go run main.go
 #从命令行获取群号
-make run GROUP_ID=xxxxxxxxx
+go run main.go GROUP_ID=xxxxxxxxx
 ```
 ### 6.观察结果
 其他群u输入 @bot jm 350234看看有没有成功返回并上传pdf
