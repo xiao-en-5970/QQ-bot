@@ -1,4 +1,4 @@
-package wait_exit
+package ticker
 
 import (
 	"context"

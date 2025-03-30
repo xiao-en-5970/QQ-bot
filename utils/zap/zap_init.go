@@ -4,18 +4,33 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"os"
+	"qq_bot/conf"
 )
 
 var Logger *zap.SugaredLogger
 var LogFile *os.File
 
-func Init(stdoutlevel string) {
+func Init() {
 	// 打开日志文件
 	LogFile, err := os.OpenFile("zap.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		panic(err)
 	}
-
+	var level zapcore.Level
+	switch conf.Cfg.Log.LogLevel {
+	case "debug":
+		level = zap.DebugLevel
+	case "info":
+		level = zap.InfoLevel
+	case "warn":
+		level = zap.WarnLevel
+	case "error":
+		level = zap.ErrorLevel
+	case "fatal":
+		level = zap.FatalLevel
+	default:
+		level = zap.WarnLevel
+	}
 	// 创建一个写入文件的核心
 	fileEncoderConfig := zap.NewProductionEncoderConfig()
 	fileEncoderConfig.TimeKey = "timestamp"
@@ -25,7 +40,7 @@ func Init(stdoutlevel string) {
 	fileCore := zapcore.NewCore(
 		fileEncoder,
 		zapcore.AddSync(LogFile),
-		zap.InfoLevel, // 设置日志级别
+		level, // 设置日志级别
 	)
 
 	// 创建一个写入标准输出的核心
@@ -33,8 +48,8 @@ func Init(stdoutlevel string) {
 	consoleEncoderConfig.TimeKey = "timestamp"
 	consoleEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	consoleEncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder // 彩色输出
-	var level zapcore.Level
-	switch stdoutlevel {
+
+	switch conf.Cfg.Log.StdOutLogLevel {
 	case "debug":
 		level = zap.DebugLevel
 	case "info":

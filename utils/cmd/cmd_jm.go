@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"qq_bot/global"
 	"qq_bot/logic"
+	"qq_bot/utils/file_operate"
 	"qq_bot/utils/to_pdf"
 	"qq_bot/utils/to_zip"
 	zaplog "qq_bot/utils/zap"
@@ -45,7 +46,7 @@ func CmdJm(client *http.Client, dataSlice []string, group_id int64, user_id int6
 func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, chapter int64) (err error) {
 
 	//判断缓存里面是否存在之前搜过的本子
-	err, exist := to_pdf.FindCache(fmt.Sprintf("./pdftmp/%d_%d.pdf", number, chapter))
+	err, exist := file_operate.FindCache(fmt.Sprintf("./pdftmp/%d_%d.pdf", number, chapter))
 	if exist {
 		err = logic.UploadGroupFile(client, group_id, fmt.Sprintf("./pdftmp/%d_%d.pdf", number, chapter), fmt.Sprintf("%d_%d.pdf", number, chapter))
 		if err != nil {

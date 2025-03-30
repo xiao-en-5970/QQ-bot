@@ -24,6 +24,7 @@ const (
 )
 
 var (
-	ChanToParseCmd = make(chan model.ChanToParseCmd, 15)
-	Wg             sync.WaitGroup
+	ChanToUpdateGroupList = make(chan struct{}, 1)
+	ChanToParseCmd        = make(chan model.ChanToParseCmd, 15)
+	Wg                    sync.WaitGroup
 )

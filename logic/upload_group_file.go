@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"qq_bot/model"
 	"qq_bot/service"
+	"qq_bot/utils/file_operate"
 	zaplog "qq_bot/utils/zap"
 )
 
@@ -18,6 +19,11 @@ func UploadGroupFile(client *http.Client, group_id int64, file string, name stri
 	})
 	if err != nil {
 		zaplog.Logger.Fatalf("UploadGroupFile failed: %v", err)
+		return err
+	}
+	err = file_operate.ClearCache()
+	if err != nil {
+		zaplog.Logger.Errorf("ClearCache failed: %v", err)
 		return err
 	}
 	zaplog.Logger.Infof("%s上传成功", name)

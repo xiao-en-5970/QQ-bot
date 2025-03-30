@@ -16,7 +16,7 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 		GroupID: group_id,
 	})
 	if err != nil {
-		zaplog.Logger.Error(err.Error())
+		zaplog.Logger.Errorf("GroupID:%d,err:%v", group_id, err)
 		return err
 	}
 	// 获取切片的长度
@@ -30,7 +30,7 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 	//如果第一次查找，则直接以最新未读消息为基准划分未读已读消息
 	if *LatestSeq == 0 {
 		*LatestSeq = resp.Data.Messages[length-1].MessageSeq - 1
-		zaplog.Logger.Debugf("LatestSeq init successfully! LatestSeq: %d GroupID:%v\n", *LatestSeq, group_id)
+		zaplog.Logger.Debugf("LatestSeq init successfully! LatestSeq: %d GroupID:%v", *LatestSeq, group_id)
 
 	}
 	//如果没有未读消息，则返回
@@ -66,8 +66,8 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 							zaplog.Logger.Error(err.Error())
 							return err
 						}
-						zaplog.Logger.Debugf("id:%d userId:%d", id, *conf.Cfg.UserID)
-						if id != *conf.Cfg.UserID {
+						zaplog.Logger.Debugf("id:%d userId:%d", id, *conf.Cfg.User.UserID)
+						if id != *conf.Cfg.User.UserID {
 							zaplog.Logger.Debugf("用户%v没有@bot", id)
 							break
 						}

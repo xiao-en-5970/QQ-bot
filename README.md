@@ -12,17 +12,34 @@
 ### 3.将作为bot的号登录带有LLOneBot插件的qq客户端
 ### 4.简单配置./test.yaml
 ```yaml
-#输出到标准输出的log等级(debug/info/warn/error)
-std_out_log_level: info
-# qq api请求地址
-address: "http://localhost:3000/"
-# 要监听的群号，为空则从命令行获取
-group_id:
-# 例：
-#  - 12312313131
-#  - 89657968898
-# qqbot用户id，为空则自动获得当前bot账号
-user_id:
+# 日志相关配置
+log:
+  std_out_log_level: info #输出到标准输出的log等级(debug/info/warn/error)
+  log_level: debug #输出到日志的log等级(debug/info/warn/error)
+
+# api相关配置
+server:
+  address: "http://localhost:3000/" # qq api请求地址
+
+# 群聊相关配置
+group:
+  group_id: # 要监听的群号，为空则从群聊列表or命令行获取
+  #例：
+  # - 1234567889674
+  # - 6546945464656
+  # - 5454563523341
+  get_group_history_interval: 5 # [单位:秒]进行群消息遍历的间隔时间，间隔越少，bot响应越快，但是消耗资源越多
+  update_group_list_interval: 3600 # [单位:秒]更新群列表间隔时间，间隔越少，群列表更新越及时，但是消耗资源越多
+
+# 用户相关配置
+user:
+  user_id: # qqbot用户id，为空则自动获得当前bot账号
+
+# 缓存相关配置
+cache:
+  tmp_dir: "./tmp" # jm下载的缓存目标文件夹
+  pdf_tmp_dir: "./pdftmp" # 图片合成pdf的缓存文件夹
+  max_size: 1024 # [单位:MB]缓存最大值
 
 ```
 

@@ -5,3 +5,7 @@ type ChanToParseCmd struct {
 	UserID  int64
 	Data    TextData
 }
+
+type ChanToUpdateGroupList struct {
+	GroupID int64
+}
