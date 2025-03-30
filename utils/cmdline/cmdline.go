@@ -4,14 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	zaplog "qq_bot/utils/zap"
 	"strconv"
 )
 
 func GetCmdLine() (err error, num int64) {
 	// 检查是否提供了至少一个参数
 	if len(os.Args) < 2 {
-		zaplog.Logger.Infof("未获取命令行参数")
+
 		return errors.New("未获取命令行参数"), 0
 	}
 	// 获取第一个参数

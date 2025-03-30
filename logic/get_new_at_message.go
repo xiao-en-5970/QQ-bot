@@ -16,14 +16,14 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 		GroupID: group_id,
 	})
 	if err != nil {
-		zaplog.Logger.Errorf("GroupID:%d,err:%v", group_id, err)
+		zaplog.Logger.Errorf("群号:%d,err:%v", group_id, err)
 		return err
 	}
 	// 获取切片的长度
 	length := len(resp.Data.Messages)
 	// 检查切片是否为空
 	if length == 0 {
-		zaplog.Logger.Warnln("切片为空")
+		zaplog.Logger.Warnf("群历史消息为空,群号:%d", group_id)
 		*LatestSeq = 0
 		return errors.New("slice is empty")
 	}
@@ -68,7 +68,6 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 						}
 						zaplog.Logger.Debugf("id:%d userId:%d", id, *conf.Cfg.User.UserID)
 						if id != *conf.Cfg.User.UserID {
-							zaplog.Logger.Debugf("用户%v没有@bot", id)
 							break
 						}
 					}

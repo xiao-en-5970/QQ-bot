@@ -18,8 +18,8 @@ var (
 // 解析指令
 func ParseCmd(ctx context.Context) {
 	var err error
-	zaplog.Logger.Infof("协程ParseCmd启动")
-	defer zaplog.Logger.Infof("协程ParseCmd退出")
+	zaplog.Logger.Debugf("协程ParseCmd启动")
+	defer zaplog.Logger.Debugf("协程ParseCmd退出")
 	defer global.Wg.Done()
 	for {
 		select {

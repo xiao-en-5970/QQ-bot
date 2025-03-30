@@ -14,8 +14,8 @@ func GroupTicker(duration time.Duration, ctx context.Context, maxCount int, clie
 	ticker := time.NewTicker(duration)
 	defer ticker.Stop() // 确保在程序结束时停止 Ticker
 	defer global.Wg.Done()
-	zaplog.Logger.Infof("协程GroupTicker(GroupID:%d)启动", group_id)
-	defer zaplog.Logger.Infof("协程GroupTicker(GroupID:%d)退出", group_id)
+	zaplog.Logger.Debugf("协程GroupTicker(GroupID:%d)启动", group_id)
+	defer zaplog.Logger.Debugf("协程GroupTicker(GroupID:%d)退出", group_id)
 
 	// 使用一个通道来接收 Ticker 触发的事件
 	tickerChan := ticker.C

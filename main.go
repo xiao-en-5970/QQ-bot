@@ -42,7 +42,7 @@ func main() {
 			return
 		} else {
 			conf.Cfg.User.UserID = &userid
-			zaplog.Logger.Infof("用户id获取成功! userid: %d", *conf.Cfg.User.UserID)
+			zaplog.Logger.Infof("用户id获取成功! Bot id: %d", *conf.Cfg.User.UserID)
 		}
 		conf.Cfg.User.UserID = &userid
 	}
@@ -68,7 +68,7 @@ func main() {
 		//global.Wg.Add(1)
 		//go ticker.UpdateGroupListTicker(time.Duration(conf.Cfg.Group.UpdateGroupListInterval)*time.Second, ctx, -1, &http.Client{})
 	}
-	zaplog.Logger.Infof("配置读取成功")
+
 	global.Wg.Add(2)
 	global.Wg.Add(len(conf.Cfg.Group.GroupID))
 	//等待信号用于优雅退出并取消其他协程
@@ -81,6 +81,7 @@ func main() {
 	for _, groupID := range conf.Cfg.Group.GroupID {
 		go ticker.GroupTicker(time.Duration(conf.Cfg.Group.GetGroupHistoryInterval)*time.Second, ctx, -1, &http.Client{}, groupID)
 	}
+
 	//等待协程退出
 	global.Wg.Wait()
 	defer close(global.ChanToParseCmd)
