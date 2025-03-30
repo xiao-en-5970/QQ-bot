@@ -57,7 +57,7 @@ func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, c
 		if err := to_zip.MkDir("./tmp"); err != nil {
 			zaplog.Logger.Warnf("创建./tmp失败: %v", err)
 		}
-		cmd := exec.Command("./package/jmcomic.exe", fmt.Sprint(number), fmt.Sprintf("p%d", chapter), "--option=./package/jmoption/opt.yml")
+		cmd := exec.Command("./package/jmcomic.exe", fmt.Sprint(number), "--option=./package/jmoption/opt.yml")
 		// 运行命令并获取输出结果
 		output, err := cmd.CombinedOutput()
 		if err != nil {

@@ -58,6 +58,9 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 						//如果是at，则检查at的对象是不是bot，如果不是，则break
 						d := singleSlice.Data.(map[string]interface{})
 						strid := d["qq"].(string)
+						if strid == "all" {
+							break
+						}
 						id, err := strconv.ParseInt(strid, 10, 64)
 						if err != nil {
 							zaplog.Logger.Error(err.Error())

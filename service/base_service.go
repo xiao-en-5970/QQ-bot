@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"qq_bot/conf"
 	"qq_bot/model"
-	"qq_bot/utils"
+	"qq_bot/utils/new_req"
 	zaplog "qq_bot/utils/zap"
 )
 
@@ -17,7 +17,7 @@ func BaseService(client *http.Client, ReqResp model.BaseInterface) (err error) {
 		zaplog.Logger.Error(err.Error())
 		return err
 	}
-	err, req := utils.NewReq(conf.Cfg.Address+ReqResp.Name(), data)
+	err, req := new_req.NewReq(conf.Cfg.Address+ReqResp.Name(), data)
 	if err != nil {
 		zaplog.Logger.Error(err.Error())
 		return err
