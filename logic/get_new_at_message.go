@@ -24,6 +24,7 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 	// 检查切片是否为空
 	if length == 0 {
 		zaplog.Logger.Warnln("切片为空")
+		*LatestSeq = 0
 		return errors.New("slice is empty")
 	}
 	//如果第一次查找，则直接以最新未读消息为基准划分未读已读消息

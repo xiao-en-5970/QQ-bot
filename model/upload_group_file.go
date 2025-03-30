@@ -16,3 +16,20 @@ type UploadGroupFileResp struct {
 	BaseResp
 	Data UploadGroupFileData `json:"data"`
 }
+
+type UploadGroupFile struct {
+	Req  *UploadGroupFileReq
+	Resp *UploadGroupFileResp
+}
+
+func (g UploadGroupFile) Name() string {
+	return "upload_group_file"
+}
+
+func (g UploadGroupFile) GetReq() interface{} {
+	return g.Req
+}
+
+func (g UploadGroupFile) GetResp() interface{} {
+	return g.Resp
+}

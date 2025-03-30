@@ -20,3 +20,20 @@ type GetGroupListResp struct {
 	BaseResp
 	Data []GetGroupInfoData `json:"data"`
 }
+
+type GetGroupList struct {
+	Req  *GetGroupListReq
+	Resp *GetGroupListResp
+}
+
+func (g GetGroupList) Name() string {
+	return "get_group_list"
+}
+
+func (g GetGroupList) GetReq() interface{} {
+	return g.Req
+}
+
+func (g GetGroupList) GetResp() interface{} {
+	return g.Resp
+}

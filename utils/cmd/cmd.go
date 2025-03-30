@@ -20,6 +20,7 @@ func ParseCmd(ctx context.Context) {
 	var err error
 	zaplog.Logger.Infof("协程ParseCmd启动")
 	defer zaplog.Logger.Infof("协程ParseCmd退出")
+	defer global.Wg.Done()
 	for {
 		select {
 		case <-ctx.Done():

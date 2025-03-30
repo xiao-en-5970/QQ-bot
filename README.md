@@ -12,6 +12,8 @@
 ### 3.将作为bot的号登录带有LLOneBot插件的qq客户端
 ### 4.简单配置./test.yaml
 ```yaml
+#输出到标准输出的log等级(debug/info/warn/error)
+std_out_log_level: info
 # qq api请求地址
 address: "http://localhost:3000/"
 # 要监听的群号，为空则从命令行获取
@@ -21,6 +23,7 @@ group_id:
 #  - 89657968898
 # qqbot用户id，为空则自动获得当前bot账号
 user_id:
+
 ```
 
 ### 5.启动项目

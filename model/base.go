@@ -12,3 +12,9 @@ type BaseResp struct {
 // 基请求
 type BaseReq struct {
 }
+
+type BaseInterface interface {
+	GetReq() interface{}
+	GetResp() interface{}
+	Name() string
+}

@@ -14,3 +14,20 @@ type GetGroupMsgHistoryResp struct {
 	BaseResp
 	Data GetGroupMsgHistoryData `json:"data"`
 }
+
+type GetGroupMsgHistory struct {
+	Req  *GetGroupMsgHistoryReq
+	Resp *GetGroupMsgHistoryResp
+}
+
+func (g GetGroupMsgHistory) Name() string {
+	return "get_group_msg_history"
+}
+
+func (g GetGroupMsgHistory) GetReq() interface{} {
+	return g.Req
+}
+
+func (g GetGroupMsgHistory) GetResp() interface{} {
+	return g.Resp
+}

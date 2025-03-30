@@ -15,3 +15,20 @@ type SendGroupMsgResp struct {
 	BaseResp
 	Data SendGroupMsgData `json:"data"`
 }
+
+type SendGroupMsg struct {
+	Req  *SendGroupMsgReq
+	Resp *SendGroupMsgResp
+}
+
+func (g SendGroupMsg) Name() string {
+	return "send_group_msg"
+}
+
+func (g SendGroupMsg) GetReq() interface{} {
+	return g.Req
+}
+
+func (g SendGroupMsg) GetResp() interface{} {
+	return g.Resp
+}
