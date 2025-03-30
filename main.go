@@ -75,6 +75,8 @@ func main() {
 	go ticker.WaitExit(cancel)
 	// 开一个协程用于解析命令（其实是防止循环引用）
 	go cmd.ParseCmd(ctx)
+	//防止前两个协程没执行完
+	time.Sleep(time.Second)
 	// 每个群聊都开一个协程用于追踪群消息
 	for _, groupID := range conf.Cfg.Group.GroupID {
 		go ticker.GroupTicker(time.Duration(conf.Cfg.Group.GetGroupHistoryInterval)*time.Second, ctx, -1, &http.Client{}, groupID)

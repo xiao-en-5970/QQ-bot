@@ -27,4 +27,5 @@ var (
 	ChanToUpdateGroupList = make(chan struct{}, 1)
 	ChanToParseCmd        = make(chan model.ChanToParseCmd, 15)
 	Wg                    sync.WaitGroup
+	Mtx                   sync.Mutex
 )
