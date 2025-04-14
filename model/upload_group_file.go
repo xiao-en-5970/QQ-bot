@@ -1,5 +1,7 @@
 package model
 
+import "qq_bot/conf"
+
 type UploadGroupFileReq struct {
 	BaseReq
 	GroupID int64  `json:"group_id"`
@@ -23,7 +25,7 @@ type UploadGroupFile struct {
 }
 
 func (g UploadGroupFile) Name() string {
-	return "upload_group_file"
+	return conf.Cfg.Server.Address + "upload_group_file"
 }
 
 func (g UploadGroupFile) GetReq() interface{} {

@@ -17,13 +17,13 @@ import (
 func CmdJm(client *http.Client, dataSlice []string, group_id int64, user_id int64, chapter int64) (err error) {
 	if len(dataSlice) < 2 {
 		zaplog.Logger.Warnf("Arg error: %v", err)
-		_ = logic.SendGroupMsg(client, group_id, user_id, fmt.Sprintf("jm%s\n%s", global.ErrCmdArgFault, global.ErrCmdJmHelp))
+		_ = logic.SendGroupAtText(client, group_id, user_id, fmt.Sprintf("jm%s\n%s", global.ErrCmdArgFault, global.ErrCmdJmHelp))
 		return nil
 	}
 	num, err := strconv.ParseInt(dataSlice[1], 10, 64)
 	if err != nil {
 		zaplog.Logger.Warnf("Arg parse error: %v", err)
-		_ = logic.SendGroupMsg(client, group_id, user_id, fmt.Sprintf("jm%s\n%s", global.ErrCmdArgFault, global.ErrCmdJmHelp))
+		_ = logic.SendGroupAtText(client, group_id, user_id, fmt.Sprintf("jm%s\n%s", global.ErrCmdArgFault, global.ErrCmdJmHelp))
 		return nil
 	}
 
@@ -35,7 +35,7 @@ func CmdJm(client *http.Client, dataSlice []string, group_id int64, user_id int6
 		}
 	}
 
-	_ = logic.SendGroupMsg(client, group_id, user_id, fmt.Sprintf("%s %d 第 %d 章", global.InfoCmdJmFindingBook, num, chapter))
+	_ = logic.SendGroupAtText(client, group_id, user_id, fmt.Sprintf("%s %d 第 %d 章", global.InfoCmdJmFindingBook, num, chapter))
 	err = Jmcomic(client, group_id, user_id, num, chapter)
 	if err != nil {
 		return err
@@ -55,7 +55,7 @@ func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, c
 	} else {
 
 		zaplog.Logger.Infof("接收到番号 %d 第 %d 章", number, chapter)
-		if err := to_zip.MkDir("./tmp"); err != nil {
+		if err = to_zip.MkDir("./tmp"); err != nil {
 			zaplog.Logger.Warnf("创建./tmp失败: %v", err)
 		}
 		cmd := exec.Command("./package/jmcomic.exe", fmt.Sprint(number), "--option=./package/jmoption/opt.yml")
@@ -63,7 +63,7 @@ func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, c
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			zaplog.Logger.Warnf("执行命令时发生错误/中途退出: %v", err)
-			_ = logic.SendGroupMsg(client, group_id, user_id, global.ErrCmdJmUnknownFault)
+			_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmUnknownFault)
 			return err
 		}
 		var builder strings.Builder
@@ -73,14 +73,14 @@ func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, c
 		//如果调用jm接口没报错
 		if strings.HasPrefix(builder.String(), "Exception") {
 			zaplog.Logger.Warnf("jm %d 查找出了未知问题", number)
-			//logic.SendGroupMsg(client, group_id, user_id, global.ErrCmdJmUnknownFault)
+			//logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmUnknownFault)
 
 		}
 
 		err = to_pdf.ToPdf(fmt.Sprintf("./tmp/%d/%d", number, chapter), fmt.Sprintf("./pdftmp/%d_%d.pdf", number, chapter))
 		if err != nil {
 			zaplog.Logger.Warn(err)
-			_ = logic.SendGroupMsg(client, group_id, user_id, global.ErrCmdJmNotFound)
+			_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmNotFound)
 		}
 		err = logic.UploadGroupFile(client, group_id, fmt.Sprintf("./pdftmp/%d_%d.pdf", number, chapter), fmt.Sprintf("%d_%d.pdf", number, chapter))
 		if err != nil {

@@ -7,7 +7,7 @@ import (
 	zaplog "qq_bot/utils/zap"
 )
 
-func SendGroupMsg(client *http.Client, group_id int64, userID int64, text string) (err error) {
+func SendGroupAtText(client *http.Client, group_id int64, userID int64, text string) (err error) {
 
 	err, _ = service.SendGroupMsg(client, &model.SendGroupMsgReq{
 		GroupID: group_id,

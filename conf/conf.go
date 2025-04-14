@@ -12,6 +12,11 @@ type Server struct {
 	Address string `mapstructure:"address"`
 }
 
+type Pixiv struct {
+	PixivAddress string `mapstructure:"pixiv_address"`
+	Size         string `mapstructure:"size"`
+}
+
 type Log struct {
 	StdOutLogLevel string `mapstructure:"std_out_log_level"`
 	LogLevel       string `mapstructure:"log_level"`
@@ -20,6 +25,7 @@ type Group struct {
 	GroupID                 []int64 `mapstructure:"group_id,omitempty"`
 	GetGroupHistoryInterval int64   `mapstructure:"get_group_history_interval"`
 	UpdateGroupListInterval int64   `mapstructure:"update_group_list_interval"`
+	Retry                   int64   `mapstructure:"retry"`
 }
 
 type User struct {
@@ -33,6 +39,7 @@ type Cache struct {
 type Config struct {
 	Log    Log    `mapstructure:"log"`
 	Server Server `mapstructure:"server"`
+	Pixiv  Pixiv  `mapstructure:"pixiv"`
 	Group  Group  `mapstructure:"group"`
 	User   User   `mapstructure:"user"`
 	Cache  Cache  `mapstructure:"cache"`

@@ -37,7 +37,9 @@ func ParseCmd(ctx context.Context) {
 				case "github":
 					err = CmdGithub(client, chanParseCmd.GroupID, chanParseCmd.UserID)
 				case "help":
-					err = CmdHelp(client, chanParseCmd.GroupID, chanParseCmd.UserID)
+					err = CmdHelp(client, dataSlice, chanParseCmd.GroupID, chanParseCmd.UserID)
+				case "pix":
+					err = CmdPix(client, dataSlice, chanParseCmd.GroupID)
 				default:
 					err = CmdDefault(client, chanParseCmd.GroupID, chanParseCmd.UserID)
 				}

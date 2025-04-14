@@ -1,5 +1,7 @@
 package model
 
+import "qq_bot/conf"
+
 type GetGroupMsgHistoryReq struct {
 	BaseReq
 	MessageSeq int64 `json:"message_seq,omitempty"`
@@ -21,7 +23,7 @@ type GetGroupMsgHistory struct {
 }
 
 func (g GetGroupMsgHistory) Name() string {
-	return "get_group_msg_history"
+	return conf.Cfg.Server.Address + "get_group_msg_history"
 }
 
 func (g GetGroupMsgHistory) GetReq() interface{} {

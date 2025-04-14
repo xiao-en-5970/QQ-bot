@@ -1,5 +1,7 @@
 package model
 
+import "qq_bot/conf"
+
 type SendGroupMsgReq struct {
 	BaseReq
 	GroupID    int64            `json:"group_id"`
@@ -22,7 +24,7 @@ type SendGroupMsg struct {
 }
 
 func (g SendGroupMsg) Name() string {
-	return "send_group_msg"
+	return conf.Cfg.Server.Address + "send_group_msg"
 }
 
 func (g SendGroupMsg) GetReq() interface{} {

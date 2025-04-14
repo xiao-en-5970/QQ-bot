@@ -79,7 +79,7 @@ func main() {
 	time.Sleep(time.Second)
 	// 每个群聊都开一个协程用于追踪群消息
 	for _, groupID := range conf.Cfg.Group.GroupID {
-		go ticker.GroupTicker(time.Duration(conf.Cfg.Group.GetGroupHistoryInterval)*time.Second, ctx, -1, &http.Client{}, groupID)
+		go ticker.GroupTicker(time.Duration(conf.Cfg.Group.GetGroupHistoryInterval)*time.Second, ctx, -1, &http.Client{}, groupID, 0)
 	}
 
 	//等待协程退出

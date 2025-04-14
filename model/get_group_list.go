@@ -1,5 +1,7 @@
 package model
 
+import "qq_bot/conf"
+
 type GetGroupListReq struct {
 	BaseReq
 	NoCache bool `json:"no_cache,omitempty"`
@@ -27,7 +29,7 @@ type GetGroupList struct {
 }
 
 func (g GetGroupList) Name() string {
-	return "get_group_list"
+	return conf.Cfg.Server.Address + "get_group_list"
 }
 
 func (g GetGroupList) GetReq() interface{} {

@@ -8,5 +8,5 @@ import (
 )
 
 func CmdDefault(client *http.Client, group_id int64, user_id int64) (err error) {
-	return logic.SendGroupMsg(client, group_id, user_id, fmt.Sprintf("%s\n%s", global.ErrCmdNotFound, global.ErrCmdMenu))
+	return logic.SendGroupAtText(client, group_id, user_id, fmt.Sprintf("%s\n%s", global.ErrCmdNotFound, global.ErrCmdMenu))
 }

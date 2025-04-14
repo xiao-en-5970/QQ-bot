@@ -1,5 +1,7 @@
 package model
 
+import "qq_bot/conf"
+
 type GetLoginInfoReq struct {
 	BaseReq
 }
@@ -20,7 +22,7 @@ type GetLoginInfo struct {
 }
 
 func (g GetLoginInfo) Name() string {
-	return "get_login_info"
+	return conf.Cfg.Server.Address + "get_login_info"
 }
 
 func (g GetLoginInfo) GetReq() interface{} {

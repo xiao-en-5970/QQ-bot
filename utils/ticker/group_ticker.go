@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"qq_bot/conf"
 	"qq_bot/global"
 	"qq_bot/logic"
 	zaplog "qq_bot/utils/zap"
 	"time"
 )
 
-func GroupTicker(duration time.Duration, ctx context.Context, maxCount int, client *http.Client, group_id int64) {
+func GroupTicker(duration time.Duration, ctx context.Context, maxCount int, client *http.Client, group_id int64, retry int64) {
 	ticker := time.NewTicker(duration)
 	defer ticker.Stop() // 确保在程序结束时停止 Ticker
 	defer global.Wg.Done()
@@ -30,8 +31,15 @@ func GroupTicker(duration time.Duration, ctx context.Context, maxCount int, clie
 			count++
 			err := logic.GetNewAtMessage(client, group_id, &seq)
 			if seq == 0 {
-				zaplog.Logger.Warnf(fmt.Sprintf("该群聊消息数量不足，停止该群聊服务.%#v", group_id))
-				return
+				//重试多次之后停止群聊服务
+				if retry >= conf.Cfg.Group.Retry {
+					zaplog.Logger.Warnf(fmt.Sprintf("该群聊消息数量不足，停止该群聊服务.%#v", group_id))
+					return
+				} else {
+					retry++
+					continue
+				}
+
 			}
 			if err != nil {
 				zaplog.Logger.Error(err)

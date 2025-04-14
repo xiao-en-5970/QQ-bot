@@ -23,7 +23,7 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 	length := len(resp.Data.Messages)
 	// 检查切片是否为空
 	if length == 0 {
-		zaplog.Logger.Warnf("群历史消息为空,群号:%d", group_id)
+		zaplog.Logger.Debugf("群历史消息为空,群号:%d", group_id)
 		*LatestSeq = 0
 		return errors.New("slice is empty")
 	}
@@ -52,7 +52,7 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 					} else {
 						if len(msg.Message) == 1 {
 							zaplog.Logger.Debugln("return menu")
-							_ = SendGroupMsg(client, group_id, userID, global.ErrCmdMenu)
+							_ = SendGroupAtText(client, group_id, userID, global.ErrCmdMenu)
 							break
 						}
 						//如果是at，则检查at的对象是不是bot，如果不是，则break
@@ -88,7 +88,7 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 
 					} else {
 						zaplog.Logger.Debugln("return menu")
-						_ = SendGroupMsg(client, group_id, userID, global.ErrCmdArgFault)
+						_ = SendGroupAtText(client, group_id, userID, global.ErrCmdArgFault)
 
 						break
 					}
