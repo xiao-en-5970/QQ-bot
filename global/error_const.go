@@ -1,6 +1,7 @@
 package global
 
 import (
+	"github.com/panjf2000/ants/v2"
 	"qq_bot/model"
 	"sync"
 )
@@ -22,7 +23,7 @@ const (
 	InfoCmdGithubPrint = "项目已开源：https://github.com/xiao-en-5970/QQ-bot"
 
 	//pixiv错误
-	ErrCmdPixHelp        = "格式：@bot pix 关键词[可留空，r18] r18[默认为0关闭,可留空]\n例：@bot pix hifumi 0"
+	ErrCmdPixHelp        = "格式：@bot pix 关键词[可留空，r18] r18[默认留空]\n例：@bot pix hifumi r18"
 	ErrCmdPixTagNotFound = "未找到相关pixiv图片,tag:"
 	ErrCmdPix404         = "图片无法访问，请重试,tag"
 
@@ -33,6 +34,8 @@ const (
 var (
 	ChanToUpdateGroupList = make(chan struct{}, 1)
 	ChanToParseCmd        = make(chan model.ChanToParseCmd, 15)
-	Wg                    sync.WaitGroup
-	Mtx                   sync.Mutex
+	Wg                    = &sync.WaitGroup{}
+	TmpMtx                = &sync.RWMutex{}
+	ActiveGroups          = make(map[int64]bool, 20)
+	ThreadPool, _         = ants.NewPool(20)
 )

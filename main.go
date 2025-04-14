@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"net/http"
 	"qq_bot/conf"
 	"qq_bot/global"
 	"qq_bot/logic"
+	"qq_bot/utils/client_pool"
 	"qq_bot/utils/cmd"
 	"qq_bot/utils/cmdline"
 	"qq_bot/utils/ticker"
@@ -22,8 +22,7 @@ var (
 // 定义要发送的数据结构
 
 func main() {
-	// 创建客户端
-	client := &http.Client{}
+
 	//初始化上下文用于退出
 	ctx, cancel := context.WithCancel(context.Background())
 	//初始化viper读数据
@@ -34,6 +33,8 @@ func main() {
 	//初始化日志
 	zaplog.Init()
 	zaplog.Logger.Infof("配置读取成功")
+	// 创建客户端
+	client := client_pool.NewClientPool()
 	//如果未指定用户名，则自动获取
 	if conf.Cfg.User.UserID == nil {
 		if err, userid = logic.GetUserId(client); err != nil {
@@ -63,29 +64,33 @@ func main() {
 			panic(err)
 			return
 		} else {
+			for _, id := range conf.Cfg.Group.GroupID {
+				global.ActiveGroups[id] = true
+			}
 			zaplog.Logger.Infof("群列表获取成功! %#v", conf.Cfg.Group.GroupID)
 		}
-		//global.Wg.Add(1)
-		//go ticker.UpdateGroupListTicker(time.Duration(conf.Cfg.Group.UpdateGroupListInterval)*time.Second, ctx, -1, &http.Client{})
 	}
 
-	global.Wg.Add(2)
-	global.Wg.Add(len(conf.Cfg.Group.GroupID))
 	//等待信号用于优雅退出并取消其他协程
 	go ticker.WaitExit(cancel)
 	// 开一个协程用于解析命令（其实是防止循环引用）
 	go cmd.ParseCmd(ctx)
+	// 定时清理缓存
+	go ticker.ClearCacheTicker(ctx)
+
 	//防止前两个协程没执行完
 	time.Sleep(time.Second)
 	// 每个群聊都开一个协程用于追踪群消息
 	for _, groupID := range conf.Cfg.Group.GroupID {
-		go ticker.GroupTicker(time.Duration(conf.Cfg.Group.GetGroupHistoryInterval)*time.Second, ctx, -1, &http.Client{}, groupID, 0)
+		go ticker.GroupTicker(time.Duration(conf.Cfg.Group.GetGroupHistoryInterval)*time.Second, ctx, -1, client_pool.NewClientPool(), groupID, 0)
 	}
-
+	time.Sleep(time.Second)
+	// 定时扫描未活跃群聊试图重新活跃
+	go ticker.UpdateGroupListTicker(time.Duration(conf.Cfg.Group.UpdateGroupListInterval)*time.Second, ctx)
 	//等待协程退出
 	global.Wg.Wait()
 	defer close(global.ChanToParseCmd)
-	defer client.CloseIdleConnections()
+	defer global.ThreadPool.Release()
 	defer zaplog.Logger.Sync()
 	defer zaplog.LogFile.Close()
 }

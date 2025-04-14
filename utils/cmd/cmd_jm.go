@@ -15,6 +15,7 @@ import (
 )
 
 func CmdJm(client *http.Client, dataSlice []string, group_id int64, user_id int64, chapter int64) (err error) {
+
 	if len(dataSlice) < 2 {
 		zaplog.Logger.Warnf("Arg error: %v", err)
 		_ = logic.SendGroupAtText(client, group_id, user_id, fmt.Sprintf("jm%s\n%s", global.ErrCmdArgFault, global.ErrCmdJmHelp))
@@ -44,7 +45,8 @@ func CmdJm(client *http.Client, dataSlice []string, group_id int64, user_id int6
 }
 
 func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, chapter int64) (err error) {
-
+	global.TmpMtx.RLock()
+	defer global.TmpMtx.RUnlock()
 	//判断缓存里面是否存在之前搜过的本子
 	err, exist := file_operate.FindCache(fmt.Sprintf("./pdftmp/%d_%d.pdf", number, chapter))
 	if exist {
@@ -97,7 +99,7 @@ func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, c
 		//	zaplog.Logger.Error(err)
 		//}
 		//zaplog.Logger.Infof("%d.zip上传成功\n", number)
-		err = to_zip.RemoveDir(fmt.Sprintf("./tmp/%d", number))
+		//err = to_zip.RemoveDir(fmt.Sprintf("./tmp/%d", number))
 		if err != nil {
 			zaplog.Logger.Warn(err)
 		}

@@ -17,8 +17,8 @@ group:
     # - 1234567889674
     # - 6546945464656
     # - 5454563523341
-  get_group_history_interval: 5 # [单位:秒]进行群消息遍历的间隔时间，间隔越少，bot响应越快，但是消耗资源越多
-  update_group_list_interval: 3600 # [单位:秒]更新群列表间隔时间，间隔越少，群列表更新越及时，但是消耗资源越多
+  get_group_history_interval: 3 # [单位:秒]进行群消息遍历的间隔时间，间隔越少，bot响应越快，但是消耗资源越多
+  update_group_list_interval: 1200 # [单位:秒]更新群列表间隔时间，间隔越少，群列表更新越及时，但是消耗资源越多
   retry: 3 #查询群消息重试次数
 
 # 用户相关配置
@@ -30,3 +30,4 @@ cache:
   tmp_dir: "./tmp" # jm下载的缓存目标文件夹
   pdf_tmp_dir: "./pdftmp" # 图片合成pdf的缓存文件夹
   max_size: 1024 # [单位:MB]缓存最大值
+  clear_interval: 1200 # [单位:秒]清理缓存间隔时间，间隔越少，缓存清理越及时，但是会阻塞文件操作

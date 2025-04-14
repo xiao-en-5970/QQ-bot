@@ -11,6 +11,7 @@ import (
 )
 
 func WaitExit(cancel context.CancelFunc) {
+	global.Wg.Add(1)
 	defer global.Wg.Done()
 	zaplog.Logger.Debugf("协程WaitExit启动")
 	defer zaplog.Logger.Debugf("协程WaitExit退出")

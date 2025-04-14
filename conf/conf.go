@@ -32,9 +32,10 @@ type User struct {
 	UserID *int64 `mapstructure:"user_id,omitempty"`
 }
 type Cache struct {
-	TmpDir    string `mapstructure:"tmp_dir"`
-	PdfTmpDir string `mapstructure:"pdf_tmp_dir"`
-	MaxSize   int64  `mapstructure:"max_size"`
+	TmpDir        string `mapstructure:"tmp_dir"`
+	PdfTmpDir     string `mapstructure:"pdf_tmp_dir"`
+	MaxSize       int64  `mapstructure:"max_size"`
+	ClearInterval int64  `mapstructure:"clear_interval"`
 }
 type Config struct {
 	Log    Log    `mapstructure:"log"`

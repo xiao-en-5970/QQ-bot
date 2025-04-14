@@ -3,14 +3,16 @@ package logic
 import (
 	"net/http"
 	"path/filepath"
+	"qq_bot/global"
 	"qq_bot/model"
 	"qq_bot/service"
-	"qq_bot/utils/file_operate"
 	zaplog "qq_bot/utils/zap"
 )
 
 func UploadGroupFile(client *http.Client, group_id int64, file string, name string) (err error) {
 	zaplog.Logger.Infof("正在上传文件%s", name)
+	global.TmpMtx.RLock()
+	defer global.TmpMtx.RUnlock()
 	absolutePath, err := filepath.Abs(file)
 	err, _ = service.UploadGroupFile(client, &model.UploadGroupFileReq{
 		GroupID: group_id,
@@ -19,13 +21,10 @@ func UploadGroupFile(client *http.Client, group_id int64, file string, name stri
 	})
 	if err != nil {
 		zaplog.Logger.Fatalf("UploadGroupFile failed: %v", err)
-		return err
-	}
-	err = file_operate.ClearCache()
-	if err != nil {
-		zaplog.Logger.Errorf("ClearCache failed: %v", err)
+
 		return err
 	}
 	zaplog.Logger.Infof("%s上传成功", name)
+
 	return nil
 }

@@ -11,7 +11,6 @@ import (
 	"qq_bot/logic"
 	"qq_bot/utils/imgcut"
 	"qq_bot/utils/zap"
-	"strconv"
 	"time"
 )
 
@@ -23,14 +22,12 @@ func CmdPix(client *http.Client, argv []string, group_id int64) (err error) {
 		zap.Logger.Debugf("接收到keyword:%s", keyword)
 	}
 	if len(argv) >= 3 {
-		r18, err = strconv.Atoi(argv[2])
-		if err != nil {
-
-			return err
+		r := argv[2]
+		if r == "r18" {
+			r18 = 1
+		} else {
+			r18 = 0
 		}
-	}
-	if r18 > 2 || r18 < 0 {
-		r18 = 0
 	}
 	if keyword == "r18" {
 		keyword = ""
@@ -59,6 +56,8 @@ func CmdPix(client *http.Client, argv []string, group_id int64) (err error) {
 		time.Sleep(5 * time.Second)
 		os.RemoveAll(filepath)
 	}()
+	global.TmpMtx.RLock()
+	defer global.TmpMtx.RUnlock()
 	file, err := os.Create(filepath) // 可修改文件名和扩展名
 
 	_, err = io.Copy(file, resp.Body)
@@ -79,6 +78,7 @@ func CmdPix(client *http.Client, argv []string, group_id int64) (err error) {
 	}
 
 	file.Close()
+
 	if err = logic.UploadGroupFile(client, group_id, filepath, filename); err != nil {
 		return err
 	}

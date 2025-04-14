@@ -72,27 +72,26 @@ func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err
 						}
 					}
 					//
-				} else if index == 1 {
+				} else {
 					if singleSlice.Type == "text" {
 						zaplog.Logger.Debugf("index == 1 && is text ")
 						data := model.TextData{}
 						d := singleSlice.Data.(map[string]interface{})
 						data.Text = d["text"].(string)
 						zaplog.Logger.Debugf("data.Text:%v", data.Text)
+						if data.Text == " " {
+							continue
+						}
 						global.ChanToParseCmd <- model.ChanToParseCmd{
 							GroupID: group_id,
 							UserID:  userID,
 							Data:    data,
 						}
 						zaplog.Logger.Debugf("global.ChanToJm <-，%#v", len(global.ChanToParseCmd))
-
 					} else {
 						zaplog.Logger.Debugln("return menu")
-						_ = SendGroupAtText(client, group_id, userID, global.ErrCmdArgFault)
-
-						break
+						SendGroupAtText(client, group_id, userID, global.ErrCmdArgFault)
 					}
-				} else {
 					break
 				}
 

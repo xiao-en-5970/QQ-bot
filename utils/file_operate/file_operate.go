@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"qq_bot/conf"
+	"qq_bot/global"
 	zaplog "qq_bot/utils/zap"
 )
 
@@ -97,8 +98,9 @@ func ClearDir(dirPath string) error {
 }
 
 // 清理缓存文件
-func ClearCache() error {
-	dirPath := conf.Cfg.Cache.PdfTmpDir
+func ClearCache(dirPath string) error {
+	global.TmpMtx.RLock()
+	defer global.TmpMtx.RUnlock()
 	maxSize := conf.Cfg.Cache.MaxSize * 1024 * 1024
 	size, err := GetDirSize(dirPath)
 	if err != nil {
@@ -117,6 +119,7 @@ func ClearCache() error {
 			return err
 		}
 		zaplog.Logger.Infof("目录%s已清空。", dirPath)
+
 	} else {
 		zaplog.Logger.Debugf("目录%s大小未超过 1000 MB，无需清空。", dirPath)
 	}
