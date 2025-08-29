@@ -6,7 +6,7 @@
 * **help 功能[jm,pix等]**（返回指令使用格式）
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=xiao-en-5970/QQ-bot&type=Timeline)](https://www.star-history.com/#xiao-en-5970/QQ-bot&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=xiao-en-5970/QQ-bot&type=Date)](https://www.star-history.com/#xiao-en-5970/QQ-bot&Date)
 ## 如何启动这个项目:
 ### 0.准备一台Windows系统的电脑
 ### 1.准备go 1.22环境 

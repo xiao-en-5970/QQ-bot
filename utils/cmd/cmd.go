@@ -40,11 +40,10 @@ func ExecCmd(chanParseCmd model.ChanToParseCmd, client *http.Client) {
 	zaplog.Logger.Debugf("<- global.ChanToJm，%#v", len(global.ChanToParseCmd))
 	chanParseCmd.Data.Text = strings.TrimSpace(chanParseCmd.Data.Text)
 	dataSlice := strings.Split(chanParseCmd.Data.Text, " ")
-	chapter := int64(1)
 	var err error
 	switch dataSlice[0] {
 	case "jm":
-		err = CmdJm(client, dataSlice, chanParseCmd.GroupID, chanParseCmd.UserID, chapter)
+		err = CmdJm(client, dataSlice, chanParseCmd.GroupID, chanParseCmd.UserID)
 	case "github":
 		err = CmdGithub(client, chanParseCmd.GroupID, chanParseCmd.UserID)
 	case "help":

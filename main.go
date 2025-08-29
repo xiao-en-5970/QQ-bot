@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"net/http"
+	_ "net/http/pprof"
 	"qq_bot/conf"
 	"qq_bot/global"
 	"qq_bot/logic"
@@ -87,6 +89,12 @@ func main() {
 	time.Sleep(time.Second)
 	// 定时扫描未活跃群聊试图重新活跃
 	go ticker.UpdateGroupListTicker(time.Duration(conf.Cfg.Group.UpdateGroupListInterval)*time.Second, ctx)
+	// 在 main 函数中启动 检查 服务
+	go func() {
+		zaplog.Logger.Debugf("协程\"net/http/pprof\"启动")
+		defer zaplog.Logger.Debugf("协程\"net/http/pprof\"退出")
+		zaplog.Logger.Infoln(http.ListenAndServe("localhost:6060", nil))
+	}()
 	//等待协程退出
 	global.Wg.Wait()
 	defer close(global.ChanToParseCmd)

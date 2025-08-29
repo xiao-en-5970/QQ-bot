@@ -125,3 +125,16 @@ func ClearCache(dirPath string) error {
 	}
 	return nil
 }
+
+// 文件夹是否存在
+func IsDirExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false
+		}
+		// 其他类型的错误（如权限问题）
+		return false
+	}
+	return info.IsDir()
+}

@@ -14,10 +14,11 @@ const (
 	ErrCmdUnknownFault = "指令未知错误"
 
 	//jm错误
-	ErrCmdJmHelp         = "格式：@bot jm 番号 章节[默认为1]\n例：@bot jm 123456 1"
-	ErrCmdJmUnknownFault = "jm" + ErrCmdUnknownFault
-	ErrCmdJmNotFound     = "未查找到番号对应的本子..."
-	InfoCmdJmFindingBook = "...正在查找本子"
+	ErrCmdJmHelp            = "格式：@bot jm 番号 章节[默认为1]\n例：@bot jm 123456 1\n@bot jm 123456 1-9"
+	ErrCmdJmUnknownFault    = "jm" + ErrCmdUnknownFault
+	ErrCmdJmNotFound        = "未查找到番号对应的本子..."
+	ErrCmdJmNotFoundChapter = "未查找到章节对应的本子..."
+	InfoCmdJmFindingBook    = "...正在查找本子"
 
 	//github 打印
 	InfoCmdGithubPrint = "项目已开源：https://github.com/xiao-en-5970/QQ-bot"

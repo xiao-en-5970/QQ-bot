@@ -21,6 +21,7 @@ func ClearCacheTicker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			zaplog.Logger.Infof("开始清理缓存")
 			err := file_operate.ClearCache(conf.Cfg.Cache.PdfTmpDir)
 			if err != nil {
 				zaplog.Logger.Errorf("PdfTmpDir 缓存处理失败: %v", err)
@@ -29,6 +30,7 @@ func ClearCacheTicker(ctx context.Context) {
 			if err != nil {
 				zaplog.Logger.Errorf("TmpDir 缓存处理失败: %v", err)
 			}
+			zaplog.Logger.Infof("缓存清理成功")
 		}
 	}
 }
