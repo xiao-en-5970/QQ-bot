@@ -1,6 +1,7 @@
 package global
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/panjf2000/ants/v2"
@@ -8,6 +9,13 @@ import (
 	"qq_bot/utils/dedup"
 	"qq_bot/utils/kimi"
 )
+
+// ErrUserNotified 表示「子命令已自行 SendGroupAtText/SendGroupText 把错误发给 QQ 群了」。
+//
+// 用法：子命令向用户发完友好提示后，把错误用 fmt.Errorf("%w: ...", global.ErrUserNotified, ...) 包一层
+// 再返回；ExecCmd 用 errors.Is 识别到该 sentinel 时就不再追加自己那条「指令执行失败」回执，
+// 避免群里出现两条提示。返回该错误的语义仍然是「这次执行失败、不要继续」，只是「已经告诉用户了」。
+var ErrUserNotified = errors.New("user already notified via QQ")
 
 const (
 	//基础错误

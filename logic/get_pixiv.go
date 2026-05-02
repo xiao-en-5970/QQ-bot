@@ -1,7 +1,7 @@
 package logic
 
 import (
-	"errors"
+	"fmt"
 	"net/http"
 	url1 "net/url"
 	"qq_bot/global"
@@ -20,9 +20,9 @@ func GetPixivPidTitleUrl(client *http.Client, groupid int64, keyword string, r18
 		return 0, "", "", err
 	}
 	if len(*resp) == 0 {
-		err = errors.New(global.ErrCmdPixTagNotFound + keyword)
+		// 已经主动告诉群里「未找到 tag」，把错误包上 ErrUserNotified，让 ExecCmd 不再追发回执
 		SendGroupText(client, groupid, global.ErrCmdPixTagNotFound+keyword)
-		return 0, "", "", err
+		return 0, "", "", fmt.Errorf("%w: %s%s", global.ErrUserNotified, global.ErrCmdPixTagNotFound, keyword)
 	}
 	zap.Logger.Debugf("resp: %v", (*resp)[0])
 	return (*resp)[0].Pid, (*resp)[0].Title, (*resp)[0].Url, nil

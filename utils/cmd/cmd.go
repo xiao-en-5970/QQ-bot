@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"qq_bot/global"
+	"qq_bot/logic"
 	"qq_bot/model"
 	"qq_bot/utils/client_pool"
 	zaplog "qq_bot/utils/zap"
@@ -56,5 +59,41 @@ func ExecCmd(chanParseCmd model.ChanToParseCmd, client *http.Client) {
 	}
 	if err != nil {
 		zaplog.Logger.Error(err)
+		// 子命令已经自己 SendGroupAtText/SendGroupText 解释过的错误，包了 ErrUserNotified。
+		// 这里识别一下就不再追加回执，避免群里看到两条提示。
+		if errors.Is(err, global.ErrUserNotified) {
+			return
+		}
+		// 其余的「子命令没向用户解释」的错误，统一在这里兜底回执，避免静默失败。
+		brief := briefError(err)
+		feedback := fmt.Sprintf("指令 %q 执行失败: %s", firstWord(chanParseCmd.Data.Text), brief)
+		_ = logic.SendGroupAtText(client, chanParseCmd.GroupID, chanParseCmd.UserID, feedback)
 	}
+}
+
+// briefError 把一个可能很长 / 多行的 err 压成单行短文本，方便丢回群里。
+//
+// 规则：
+//   - 取首行（过滤掉 stack-like 续行 / 多重 wrap 的换行）
+//   - 按 rune 截断到 100 字符，超过加 "..."（避免中文截半个字）
+func briefError(err error) string {
+	s := err.Error()
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+	runes := []rune(s)
+	const max = 100
+	if len(runes) > max {
+		return string(runes[:max]) + "..."
+	}
+	return s
+}
+
+// firstWord 取出指令文本的第一个 token（指令名），用来回执时让用户知道是哪条指令挂了。
+func firstWord(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, " \t"); i >= 0 {
+		return s[:i]
+	}
+	return s
 }

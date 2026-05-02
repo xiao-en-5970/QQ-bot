@@ -130,6 +130,9 @@ func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, c
 	if exist {
 		if err = logic.UploadGroupFile(client, group_id, p.pdfFile, p.pdfName); err != nil {
 			zaplog.Logger.Warn(err)
+			// 之前这里只 Warn 然后函数往后走 return nil，用户得不到任何反馈。
+			// 现在上抛到 ExecCmd，让它兜底回执「指令 'jm' 执行失败: ...」。
+			return err
 		}
 	} else {
 		if !file_operate.IsDirExists(p.chapDir) {
@@ -146,7 +149,7 @@ func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, c
 			if err != nil {
 				zaplog.Logger.Warnf("执行 jmcomic 出错/中途退出: %v\noutput=%s", err, output)
 				_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmUnknownFault)
-				return err
+				return fmt.Errorf("%w: jmcomic 执行失败: %v", global.ErrUserNotified, err)
 			}
 			zaplog.Logger.Debugf("jmcomic 输出结果: %s", output)
 			if strings.HasPrefix(string(output), "Exception") {
@@ -162,7 +165,7 @@ func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, c
 		if err = to_pdf.ToPdf(p.chapDir, p.pdfFile); err != nil {
 			zaplog.Logger.Warn(err)
 			_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmUnknownFault)
-			return err
+			return fmt.Errorf("%w: to_pdf 失败: %v", global.ErrUserNotified, err)
 		}
 		if err = logic.UploadGroupFile(client, group_id, p.pdfFile, p.pdfName); err != nil {
 			zaplog.Logger.Warn(err)
