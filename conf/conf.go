@@ -13,13 +13,21 @@ import (
 
 var Cfg Config
 
-// Server 对应 NapCat 的 OneBot11 HTTP 接口配置。
+// Server 对应 NapCat 的 OneBot11 HTTP / WebSocket 接口配置。
 //
-// Address     NapCat HTTP 服务的根地址，结尾必须带 /，例如 https://bot-http.xiaoen.xyz/
-// AccessToken NapCat onebot11/HTTP 服务器配置的 token；为空表示未启用鉴权
+// Address       NapCat HTTP 服务的根地址（用来发送 send_group_msg 等动作），结尾必须带 /
+//               例如 https://bot-http.xiaoen.xyz/
+// WSAddress     NapCat WebSocket Server 地址（事件推送），形如 wss://bot-ws.xiaoen.xyz/
+//               消息接收走 WS 而不是轮询 get_group_msg_history（NapCat 那个接口在某些群里
+//               返回会卡住"最新 20 条"不更新；详见 utils/wsclient 包注释里的踩坑记录）。
+// AccessToken   HTTP server 鉴权 token（Authorization: Bearer ...）；空表示 NapCat 未启用鉴权
+// WSAccessToken WS server 鉴权 token；NapCat 把 HTTP / WS 当两套独立的网络适配器，token 各自配
+//               留空时回退到 AccessToken（适合两边配同一个 token 的简单场景）
 type Server struct {
-	Address     string `mapstructure:"address"`
-	AccessToken string `mapstructure:"access_token,omitempty"`
+	Address       string `mapstructure:"address"`
+	WSAddress     string `mapstructure:"ws_address,omitempty"`
+	AccessToken   string `mapstructure:"access_token,omitempty"`
+	WSAccessToken string `mapstructure:"ws_access_token,omitempty"`
 }
 
 type Pixiv struct {
@@ -34,11 +42,17 @@ type Log struct {
 	LogFile string `mapstructure:"log_file"`
 }
 
+// Group 群相关配置。
+//
+// GroupID  bot 监听的群号列表；留空则启动时调 NapCat /get_group_list 自动获取。
+//
+//	WS 模式下"监听哪些群"完全由 NapCat 那边的 push 决定，这个字段保留只是为了
+//	启动时打印一下方便排查，不参与消息接收。
+//
+// 历史的 get_group_history_interval / update_group_list_interval / retry 字段已弃用
+// （WS 模式不再轮询历史消息），yaml 里如果还有这些字段会被 viper 静默忽略。
 type Group struct {
-	GroupID                 []int64 `mapstructure:"group_id,omitempty"`
-	GetGroupHistoryInterval int64   `mapstructure:"get_group_history_interval"`
-	UpdateGroupListInterval int64   `mapstructure:"update_group_list_interval"`
-	Retry                   int64   `mapstructure:"retry"`
+	GroupID []int64 `mapstructure:"group_id,omitempty"`
 }
 
 type User struct {
@@ -138,10 +152,9 @@ func Init() (err error) {
 // 注：group.group_id（[]int64）暂不支持环境变量，生产建议留空让 main.go 自动从 NapCat 拉群列表。
 func bindEnvKeys() {
 	keys := []string{
-		"server.address", "server.access_token",
+		"server.address", "server.ws_address", "server.access_token", "server.ws_access_token",
 		"log.std_out_log_level", "log.log_level", "log.log_file",
 		"pixiv.pixiv_address", "pixiv.size",
-		"group.get_group_history_interval", "group.update_group_list_interval", "group.retry",
 		"user.user_id",
 		"cache.tmp_dir", "cache.pdf_tmp_dir", "cache.max_size", "cache.clear_interval",
 		"tools.jmcomic_bin", "tools.img2pdf_bin", "tools.python_bin",

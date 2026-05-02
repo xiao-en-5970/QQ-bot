@@ -12,8 +12,8 @@ import (
 	"qq_bot/utils/cmdline"
 	"qq_bot/utils/kimi"
 	"qq_bot/utils/ticker"
+	"qq_bot/utils/wsclient"
 	zaplog "qq_bot/utils/zap"
-	"time"
 )
 
 var (
@@ -63,15 +63,12 @@ func main() {
 			conf.Cfg.Group.GroupID = append(conf.Cfg.Group.GroupID, groupid)
 		}
 	}
+	// 群列表只用来打印一下"bot 在哪些群"方便排查；WS 模式下不再按群跑独立 ticker，
+	// NapCat 会把 bot 加入的所有群的消息都通过同一条 WebSocket 推过来。
 	if conf.Cfg.Group.GroupID == nil {
-		err, conf.Cfg.Group.GroupID = logic.GetGroupList(client, true)
-		if err != nil {
-			zaplog.Logger.Panicf("群列表获取失败!")
-			panic(err)
+		if err, conf.Cfg.Group.GroupID = logic.GetGroupList(client, true); err != nil {
+			zaplog.Logger.Warnf("群列表获取失败（不影响 WS 收消息）: %v", err)
 		} else {
-			for _, id := range conf.Cfg.Group.GroupID {
-				global.ActiveGroups[id] = true
-			}
 			zaplog.Logger.Infof("群列表获取成功! %#v", conf.Cfg.Group.GroupID)
 		}
 	}
@@ -80,12 +77,10 @@ func main() {
 	go cmd.ParseCmd(ctx)
 	go ticker.ClearCacheTicker(ctx)
 
-	time.Sleep(time.Second)
-	for _, groupID := range conf.Cfg.Group.GroupID {
-		go ticker.GroupTicker(time.Duration(conf.Cfg.Group.GetGroupHistoryInterval)*time.Second, ctx, -1, client_pool.NewClientPool(), groupID, 0)
-	}
-	time.Sleep(time.Second)
-	go ticker.UpdateGroupListTicker(time.Duration(conf.Cfg.Group.UpdateGroupListInterval)*time.Second, ctx)
+	// WebSocket 长连接，唯一的"消息入口"。断线指数退避自动重连，详见 wsclient.Run 注释。
+	// 老的轮询方案（GroupTicker / UpdateGroupListTicker）已弃用，原因见 utils/wsclient 包注释。
+	go wsclient.Run(ctx)
+
 	go func() {
 		zaplog.Logger.Debugf("协程\"net/http/pprof\"启动")
 		defer zaplog.Logger.Debugf("协程\"net/http/pprof\"退出")

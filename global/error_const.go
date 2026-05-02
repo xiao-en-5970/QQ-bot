@@ -44,17 +44,16 @@ const (
 )
 
 var (
-	ChanToUpdateGroupList = make(chan struct{}, 1)
-	ChanToParseCmd        = make(chan model.ChanToParseCmd, 15)
-	Wg                    = &sync.WaitGroup{}
-	TmpMtx                = &sync.RWMutex{}
-	ActiveGroups          = make(map[int64]bool, 20)
-	ThreadPool, _         = ants.NewPool(20)
+	ChanToParseCmd = make(chan model.ChanToParseCmd, 15)
+	Wg             = &sync.WaitGroup{}
+	TmpMtx         = &sync.RWMutex{}
+	ThreadPool, _  = ants.NewPool(20)
 
 	// Kimi 是 Moonshot AI 句柄；如果配置里没填 GPT_API_KEY 就是 nil，CmdDefault 会回退打印菜单
 	Kimi *kimi.Kimi
 
 	// ProcessedMsgIDs 记录已经处理过的群消息 message_id，防止重复回复。
-	// 容量 4096 ≈ 18 群 × ~228 条消息缓冲；message_id 是单调增长的，旧的可以安全淘汰。
+	// WS 模式下 NapCat 单连接不会重复推同一事件，但断线重连 / 跑两个 bot 实例时仍能兜底。
+	// 容量 4096 远超日常需要；message_id 是单调增长的，旧的可以安全淘汰。
 	ProcessedMsgIDs = dedup.NewLRUSet(4096)
 )

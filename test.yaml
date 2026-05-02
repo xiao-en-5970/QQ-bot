@@ -4,13 +4,20 @@ log:
   log_level: debug #输出到日志的log等级(debug/info/warn/error)
   log_file: "" #日志文件路径，留空时默认使用 系统临时目录/qq-bot/logs/qq-bot.log
 
-# api相关配置（NapCat HTTP 服务）
+# api相关配置（NapCat HTTP + WebSocket 服务）
 server:
-  # NapCat HTTP 接口地址，结尾必须带 /
+  # NapCat HTTP 接口地址，结尾必须带 / —— 用来调 send_group_msg / get_group_list 等 action
   # 优先用反代 https://bot-http.xiaoen.xyz/，无法访问时换 https://cat.xiaoen.xyz:3000/
   address: "https://bot-http.xiaoen.xyz/"
-  # NapCat WebUI -> 网络配置 -> HTTP server 中的 token；不填则不带 Authorization
+  # NapCat WebSocket Server 地址 —— bot 作为客户端 dial 过去，所有群消息事件都从这里推过来
+  # 这是接收消息的唯一入口；之前用 /get_group_msg_history 轮询的方案已弃用
+  ws_address: "wss://bot-ws.xiaoen.xyz/"
+  # HTTP server 鉴权 token（NapCat WebUI -> 网络配置 -> HTTP 服务器）；留空则不带 Authorization
   access_token: "http-theo5970"
+  # WS server 鉴权 token（NapCat WebUI -> 网络配置 -> WebSocket 服务器）
+  # 注意：NapCat 把 HTTP / WS 当两个独立网络适配器，每个有各自的 token
+  # 留空时回退到上面的 access_token；如果两边一致写一个就行
+  ws_access_token: "ws-theo5970"
 
 # pixiv 相关配置
 pixiv:
@@ -18,15 +25,18 @@ pixiv:
   size: origin #大小【原图】
 
 # 群聊相关配置
+#
+# WS 模式下，bot 监听 NapCat push 过来的事件流，"哪些群"完全由 NapCat 那边的群成员关系决定，
+# 这里 group_id 留空即可（仅用于启动时打印一下方便排查）。
+#
+# 老的轮询参数 get_group_history_interval / update_group_list_interval / retry 已弃用，
+# yaml 里写了也会被静默忽略。
 group:
-  group_id: # 要监听的群号，为空则从群聊列表or命令行获取
-  #例：
-    # - 1234567889674
-    # - 6546945464656
-    # - 5454563523341
-  get_group_history_interval: 3 # [单位:秒]进行群消息遍历的间隔时间，间隔越少，bot响应越快，但是消耗资源越多
-  update_group_list_interval: 1200 # [单位:秒]更新群列表间隔时间，间隔越少，群列表更新越及时，但是消耗资源越多
-  retry: 3 #查询群消息重试次数
+  group_id: # 想限定监听范围时填，留空 = bot 加入的所有群都会收消息
+  # 例：
+  # - 1234567889674
+  # - 6546945464656
+  # - 5454563523341
 
 # 用户相关配置
 user:

@@ -2,7 +2,7 @@
 //
 // 用途：跟踪已经处理过的 NapCat message_id，绝对避免下面这些场景导致重复回复：
 //   - NapCat /get_group_msg_history 偶发把同一条消息的 message_seq 改了再返回一遍
-//   - 短时间网络抖动后 GetNewAtMessage 把旧消息又拉回来
+//   - WS 断线重连后偶发把同一条事件再推一次（NapCat 行为偶尔抖动）
 //   - 部署/调试时不小心同时跑了两个 bot 实例（兜底，但不能彻底防）
 //
 // LRU 而不是单纯 set：消息 id 是单调增长的，旧的可以安全淘汰，避免内存无限增长。
