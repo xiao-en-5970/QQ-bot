@@ -151,13 +151,20 @@ func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, c
 				_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmUnknownFault)
 				return fmt.Errorf("%w: jmcomic 执行失败: %v", global.ErrUserNotified, err)
 			}
-			zaplog.Logger.Debugf("jmcomic 输出结果: %s", output)
+			// jmcomic 真正打印了什么是排查的关键信息（番号不存在 / opt.yml 路径错 / 限流 等都从这里看）。
+			// 之前是 Debug 级别，生产里 LOG_LEVEL=info 看不见，遇到问题完全不知道发生了啥。
+			zaplog.Logger.Infof("jmcomic %d 输出: %s", number, string(output))
 			if strings.HasPrefix(string(output), "Exception") {
 				zaplog.Logger.Warnf("jm %d 查找出了未知问题", number)
 				_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmNotFound)
 				return nil
 			}
 			if !file_operate.IsDirExists(p.chapDir) {
+				// 这条路径之前完全静默：bot 给群回 ErrCmdJmNotFoundChapter，
+				// 但 stdout/log 啥都不写，看着就像"日志中断了"。
+				// 常见原因：jmcomic 退出 0 但根本没下载（账号风控 / opt.yml 路径错 / QQBOT_JM_DIR 没生效等）。
+				zaplog.Logger.Warnf("jm %d 第 %d 章: jmcomic 退出 0 但 %s 不存在 (本子或章节不存在 / opt.yml 路径未生效?)",
+					number, chapter, p.chapDir)
 				_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmNotFoundChapter)
 				return nil
 			}

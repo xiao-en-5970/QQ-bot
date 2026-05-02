@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	_ "net/http/pprof"
 	"qq_bot/conf"
@@ -29,6 +30,10 @@ func main() {
 	if err != nil {
 		return
 	}
+	// 在 zap 初始化之前用 fmt 直接打到 stdout，确认 env / yaml 解析后实际拿到的 log level，
+	// 否则一旦 level 落到 warn（默认值），bot 启动时的 info / debug 全都看不见，没法排查。
+	fmt.Printf("[boot] log.std_out_log_level=%q  log.log_level=%q  log_file=%q\n",
+		conf.Cfg.Log.StdOutLogLevel, conf.Cfg.Log.LogLevel, conf.Cfg.Log.LogFile)
 	zaplog.Init()
 	zaplog.Logger.Infof("配置读取成功, NapCat HTTP=%s", conf.Cfg.Server.Address)
 
