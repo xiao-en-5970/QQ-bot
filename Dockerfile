@@ -1,36 +1,66 @@
-# 运行 CI/rsync 提供的预编译 Linux 二进制（build/app），不在镜像内编译 Go
-# 同时安装 jmcomic + img2pdf 两个 Python 工具，提供 jm 指令所需的运行时
+# syntax=docker/dockerfile:1.7
+# 注：第一行必须是 syntax 指令，启用 BuildKit 的 --mount=type=cache 特性
+# CI 已 export DOCKER_BUILDKIT=1，重复构建时 apt / pip 直接走本地缓存
+#
+# 镜像职责：跑 CI 交叉编译好的 build/app + jmcomic / img2pdf 两个 Python 工具
+
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# - tzdata        : 上海时区
-# - ca-certificates : NapCat https 调用需要
-# - python3 / pip  : 装 jmcomic + img2pdf
-# - 用 venv 而不是直接 pip install，避免 ubuntu24 的 PEP 668 externally-managed-environment 报错
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 默认用阿里云公网镜像（Aliyun ECS / 普通 Linux 都能跑）
+# Aliyun ECS 上想再快可以：
+#   docker build --build-arg APT_MIRROR=mirrors.cloud.aliyuncs.com \
+#                --build-arg PIP_INDEX_URL=https://mirrors.cloud.aliyuncs.com/pypi/simple/ \
+#                --build-arg PIP_TRUSTED_HOST=mirrors.cloud.aliyuncs.com ...
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
+
+# ---------- apt: 换镜像 + 缓存挂载 ----------
+# 1. ubuntu24 默认 sources 是 deb822 (.sources)；同时改一遍 /etc/apt/sources.list 不会有副作用
+# 2. /etc/apt/apt.conf.d/docker-clean 默认会在每次 apt-get install 后删 apt 缓存，必须先删它
+# 3. /var/cache/apt /var/lib/apt 两个 cache mount 都要挂，第一个放 .deb，第二个放 lists
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    sed -i "s|//.*archive.ubuntu.com|//${APT_MIRROR}|g; s|//security.ubuntu.com|//${APT_MIRROR}|g" \
+        /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true && \
+    apt-get update && apt-get install -y --no-install-recommends \
         tzdata \
         ca-certificates \
         python3 \
         python3-venv \
-        python3-pip \
-    && rm -rf /var/lib/apt/lists/*
+        python3-pip
 
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Python 工具装到独立 venv 里再把 venv 的 bin 放进 PATH，
-# jmcomic / img2pdf 命令直接可调（utils/cmd/cmd_jm.go、utils/to_pdf/to_pdf.go 默认走 PATH）
+# ---------- python: venv + pip 缓存挂载 + 阿里云源 + 重试 ----------
+# - 用 venv，避开 ubuntu24 PEP 668 externally-managed-environment 报错
+# - 先 upgrade pip，再装运行时依赖；分层方便缓存
+# - --retries 5 --timeout 120 抗弱网（IncompleteRead 主因）
 ENV VENV_PATH=/opt/qq-bot-venv
-RUN python3 -m venv ${VENV_PATH} \
-    && ${VENV_PATH}/bin/pip install --no-cache-dir --upgrade pip \
-    && ${VENV_PATH}/bin/pip install --no-cache-dir \
+RUN python3 -m venv ${VENV_PATH}
+
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+ENV PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
+ENV PIP_DEFAULT_TIMEOUT=120
+ENV PIP_RETRIES=5
+
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    ${VENV_PATH}/bin/pip install --upgrade pip
+
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    ${VENV_PATH}/bin/pip install \
         jmcomic \
         img2pdf \
         pillow \
         pyyaml
+
 ENV PATH="${VENV_PATH}/bin:${PATH}"
 
+# ---------- app ----------
 WORKDIR /app
 
 # Go 二进制由 CI 在 Actions runner 上交叉编译好，直接 COPY 进来
