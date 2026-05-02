@@ -24,10 +24,10 @@ import (
 //  3. **bot 自己发的消息直接跳过**（防 bot 回复自己）
 //
 // 启动行为：
-//   latestSeq == 0 时把基线设为 maxSeq-1，让本批"最后一条"也能被处理。
-//   这样 bot 刚启动 / 容器刚重启时，用户刚发的那条 @bot 也能得到回应；
-//   再往前的历史消息被基线挡住、不会被回复。
-//   重启时偶尔出现的"老 bot 已回复 + 新 bot 又回复一次"靠 LRU 防不了（不同进程），
+//   latestSeq == 0 时把基线设为 messages[0].MessageSeq-1，让本批 20 条全部进入 @bot 检查。
+//   这样 bot 刚启动 / 容器刚重启时，最近一段时间内的 @bot（无论是否就是最后一条）都能被处理；
+//   防重复完全靠 ProcessedMsgIDs（同进程 LRU）兜底：本批里被回复过的 message_id 第二轮立即命中。
+//   重启时可能出现"老 bot 已回复 + 新 bot 又回复一次"——这是不同进程间 LRU 不共享的副作用，
 //   要彻底防只能持久化 last_processed_id，目前不在范围。
 //
 // 规则：
@@ -63,12 +63,13 @@ func GetNewAtMessage(client *http.Client, groupID int64, latestSeq *int64) error
 	maxSeq := messages[len(messages)-1].MessageSeq
 
 	if *latestSeq == 0 {
-		// 启动初始化：把基线设为 maxSeq-1，使"本批最后一条"会被处理。
-		// 这样用户在 bot 重启后立刻 @bot 也能拿到回复；更早的历史不会被回复。
-		// LRU 兜底防止任何路径下的重复处理。
-		baseline := maxSeq - 1
-		zaplog.Logger.Infof("LatestSeq init group=%d 基线=%d (将仅处理本批 tail seq=%d)",
-			groupID, baseline, maxSeq)
+		// 启动初始化：把基线设到本批"第一条之前"，让本批 20 条全都过 @bot 检查。
+		// 这样不再要求"@bot 必须刚好是最后一条"，最近一段时间内的 @bot 都能补回。
+		// 防重复完全靠 ProcessedMsgIDs（LRU）：本批已回过的 message_id 第二轮命中后跳过；
+		// 跨进程重启时 LRU 重建会重复一次，是已知 trade-off。
+		baseline := messages[0].MessageSeq - 1
+		zaplog.Logger.Infof("LatestSeq init group=%d 基线=%d (将处理本批 seq=[%d, %d])",
+			groupID, baseline, messages[0].MessageSeq, maxSeq)
 		*latestSeq = baseline
 	}
 
