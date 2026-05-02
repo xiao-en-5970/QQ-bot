@@ -7,21 +7,19 @@ import (
 	zaplog "qq_bot/utils/zap"
 )
 
-func SendGroupText(client *http.Client, group_id int64, text string) (err error) {
-
-	err, _ = service.SendGroupMsg(client, &model.SendGroupMsgReq{
-		GroupID: group_id,
-		Message: []model.MessageContent{
+// SendGroupText 向群里发送一条纯文本消息（NapCat OB11MessageText）。
+func SendGroupText(client *http.Client, groupID int64, text string) error {
+	err, _ := service.SendGroupMsg(client, &model.SendGroupMsgReq{
+		GroupID: groupID,
+		Message: []model.MessageSegment{
 			{
 				Type: "text",
-				Data: model.TextData{
-					Text: " " + text,
-				},
+				Data: model.TextData{Text: text},
 			},
 		},
 	})
 	if err != nil {
-		zaplog.Logger.Fatalf("Msg send failed: %v", err)
+		zaplog.Logger.Errorf("napcat send_group_msg(text) failed group=%d: %v", groupID, err)
 		return err
 	}
 	return nil

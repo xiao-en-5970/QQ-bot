@@ -9,22 +9,34 @@ import (
 	zaplog "qq_bot/utils/zap"
 )
 
-func UploadGroupFile(client *http.Client, group_id int64, file string, name string) (err error) {
-	zaplog.Logger.Infof("正在上传文件%s", name)
+// UploadGroupFile 调 NapCat /upload_group_file 把本地文件上传到群文件区。
+//
+// NapCat 接受的 file 字段允许：
+//   - 本地绝对路径
+//   - file:// URI
+//   - http(s):// URL
+// 这里走绝对路径，是 NapCat 文档的默认建议形式。
+func UploadGroupFile(client *http.Client, groupID int64, file string, name string) error {
+	zaplog.Logger.Infof("正在上传文件 %s 到 group=%d", name, groupID)
+
 	global.TmpMtx.RLock()
 	defer global.TmpMtx.RUnlock()
+
 	absolutePath, err := filepath.Abs(file)
+	if err != nil {
+		zaplog.Logger.Errorf("无法解析文件绝对路径 file=%s: %v", file, err)
+		return err
+	}
+
 	err, _ = service.UploadGroupFile(client, &model.UploadGroupFileReq{
-		GroupID: group_id,
+		GroupID: groupID,
 		File:    absolutePath,
 		Name:    name,
 	})
 	if err != nil {
-		zaplog.Logger.Fatalf("UploadGroupFile failed: %v", err)
-
+		zaplog.Logger.Errorf("upload_group_file failed group=%d file=%s: %v", groupID, name, err)
 		return err
 	}
-	zaplog.Logger.Infof("%s上传成功", name)
-
+	zaplog.Logger.Infof("%s 上传成功", name)
 	return nil
 }

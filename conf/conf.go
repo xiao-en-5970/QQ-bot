@@ -3,13 +3,20 @@ package conf
 import (
 	"errors"
 	"fmt"
+	"strings"
+
 	"github.com/spf13/viper"
 )
 
 var Cfg Config
 
+// Server 对应 NapCat 的 HTTP 接口配置
+//
+// Address  : NapCat HTTP 服务的根地址，必须以 / 结尾。例如 http://localhost:3000/
+// AccessToken : NapCat 在 onebot11 配置里 token 字段，没设的话留空
 type Server struct {
-	Address string `mapstructure:"address"`
+	Address     string `mapstructure:"address"`
+	AccessToken string `mapstructure:"access_token,omitempty"`
 }
 
 type Pixiv struct {
@@ -47,15 +54,10 @@ type Config struct {
 }
 
 func Init() (err error) {
-	// 创建一个新的 viper 实例
-	viper.SetConfigName("test") // 配置文件名（不带扩展名）
-	viper.SetConfigType("yaml") // 配置文件类型
-	viper.AddConfigPath(".")    // 配置文件路径（当前目录）
-	// 如果配置文件不在当前目录，可以添加更多路径
-	// viper.AddConfigPath("/etc/myapp/")
-	// viper.AddConfigPath("$HOME/.myapp")
+	viper.SetConfigName("test")
+	viper.SetConfigType("yaml")
+	viper.AddConfigPath(".")
 
-	// 读取配置文件
 	if err = viper.ReadInConfig(); err != nil {
 		var configFileNotFoundError viper.ConfigFileNotFoundError
 		if errors.As(err, &configFileNotFoundError) {
@@ -63,11 +65,13 @@ func Init() (err error) {
 		}
 	}
 
-	// 将配置文件内容映射到 Config 结构体
-
 	if err = viper.Unmarshal(&Cfg); err != nil {
 
 		return errors.New(fmt.Sprintf("无法解析配置文件: %v", err))
+	}
+
+	if Cfg.Server.Address != "" && !strings.HasSuffix(Cfg.Server.Address, "/") {
+		Cfg.Server.Address = Cfg.Server.Address + "/"
 	}
 
 	return nil

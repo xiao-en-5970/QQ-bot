@@ -3,13 +3,19 @@ log:
   std_out_log_level: debug #输出到标准输出的log等级(debug/info/warn/error)
   log_level: debug #输出到日志的log等级(debug/info/warn/error)
 
-# api相关配置
+# api相关配置（NapCat HTTP 服务）
 server:
-  address: "http://localhost:3000/" # qq api请求地址
+  # NapCat HTTP 接口地址，结尾必须带 /
+  # 优先用反代 https://bot-http.xiaoen.xyz/，无法访问时换 https://cat.xiaoen.xyz:3000/
+  address: "https://bot-http.xiaoen.xyz/"
+  # NapCat WebUI -> 网络配置 -> HTTP server 中的 token；不填则不带 Authorization
+  access_token: "V:iqg46Jnvx.El3&"
+
 # pixiv 相关配置
 pixiv:
   pixiv_address: "https://image.anosu.top/pixiv/json" #pixiv api请求地址
   size: origin #大小【原图】
+
 # 群聊相关配置
 group:
   group_id: # 要监听的群号，为空则从群聊列表or命令行获取

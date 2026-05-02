@@ -11,94 +11,98 @@ import (
 	"strconv"
 )
 
-func GetNewAtMessage(client *http.Client, group_id int64, LatestSeq *int64) (err error) {
+// GetNewAtMessage 拉一次 NapCat /get_group_msg_history，识别 @bot 指令并放入解析队列。
+//
+// 主要规则：
+//   - segment[0].Type 必须是 "at"
+//   - at.qq 必须解析成当前 bot 的 user_id
+//   - segment[1] 必须是 "text"，作为指令字符串
+//   - 单独 @bot（无后续 segment）视为求帮助
+//
+// LatestSeq 用于游标：第一次调用时初始化为「上一条 - 1」防止处理历史消息。
+func GetNewAtMessage(client *http.Client, groupID int64, latestSeq *int64) error {
 	err, resp := ser.GetGroupMsgHistory(client, &model.GetGroupMsgHistoryReq{
-		GroupID: group_id,
+		GroupID: groupID,
 	})
 	if err != nil {
-		zaplog.Logger.Errorf("群号:%d,err:%v", group_id, err)
+		zaplog.Logger.Errorf("get_group_msg_history failed group=%d: %v", groupID, err)
 		return err
 	}
-	// 获取切片的长度
-	length := len(resp.Data.Messages)
-	// 检查切片是否为空
+
+	messages := resp.Data.Messages
+	length := len(messages)
 	if length == 0 {
-		zaplog.Logger.Debugf("群历史消息为空,群号:%d", group_id)
-		*LatestSeq = 0
+		zaplog.Logger.Debugf("群历史消息为空, group=%d", groupID)
+		*latestSeq = 0
 		return errors.New("slice is empty")
 	}
-	//如果第一次查找，则直接以最新未读消息为基准划分未读已读消息
-	if *LatestSeq == 0 {
-		*LatestSeq = resp.Data.Messages[length-1].MessageSeq - 1
-		zaplog.Logger.Debugf("LatestSeq init successfully! LatestSeq: %d GroupID:%v", *LatestSeq, group_id)
 
+	tailSeq := messages[length-1].MessageSeq
+
+	if *latestSeq == 0 {
+		*latestSeq = tailSeq - 1
+		zaplog.Logger.Debugf("LatestSeq init group=%d seq=%d", groupID, *latestSeq)
 	}
-	//如果没有未读消息，则返回
-	if *LatestSeq == resp.Data.Messages[length-1].MessageSeq {
-		//zaplog.Logger.Debugf("消息已经为最新消息 LatestSeq: %d GroupID:%v", *LatestSeq, group_id)
+	if *latestSeq == tailSeq {
 		return nil
 	}
-	//遍历未读消息
-	for _, msg := range resp.Data.Messages {
-		userID := msg.UserID
-		//如果消息是未读
-		if msg.MessageSeq > *LatestSeq {
-			for index, singleSlice := range msg.Message {
 
-				if index == 0 {
-					//如果开头不是at，就不处理，break掉
-					if singleSlice.Type != "at" {
-						break
-					} else {
-						if len(msg.Message) == 1 {
-							zaplog.Logger.Debugln("return menu")
-							_ = SendGroupAtText(client, group_id, userID, global.ErrCmdMenu)
-							break
-						}
-						//如果是at，则检查at的对象是不是bot，如果不是，则break
-						d := singleSlice.Data.(map[string]interface{})
-						strid := d["qq"].(string)
-						if strid == "all" {
-							break
-						}
-						id, err := strconv.ParseInt(strid, 10, 64)
-						if err != nil {
-							zaplog.Logger.Error(err.Error())
-							return err
-						}
-						zaplog.Logger.Debugf("id:%d userId:%d", id, *conf.Cfg.User.UserID)
-						if id != *conf.Cfg.User.UserID {
-							break
-						}
-					}
-					//
-				} else {
-					if singleSlice.Type == "text" {
-						zaplog.Logger.Debugf("index == 1 && is text ")
-						data := model.TextData{}
-						d := singleSlice.Data.(map[string]interface{})
-						data.Text = d["text"].(string)
-						zaplog.Logger.Debugf("data.Text:%v", data.Text)
-						if data.Text == " " {
-							continue
-						}
-						global.ChanToParseCmd <- model.ChanToParseCmd{
-							GroupID: group_id,
-							UserID:  userID,
-							Data:    data,
-						}
-						zaplog.Logger.Debugf("global.ChanToJm <-，%#v", len(global.ChanToParseCmd))
-					} else {
-						zaplog.Logger.Debugln("return menu")
-						SendGroupAtText(client, group_id, userID, global.ErrCmdArgFault)
-					}
-					break
-				}
-
-			}
+	for _, msg := range messages {
+		if msg.MessageSeq <= *latestSeq {
+			continue
+		}
+		if len(msg.Message) == 0 {
+			continue
 		}
 
+		first := msg.Message[0]
+		if first.Type != "at" {
+			continue
+		}
+		atData, _ := model.AsAtData(first.Data)
+		if atData.QQ == "all" {
+			continue
+		}
+
+		// 单独 @bot 视为求帮助
+		if len(msg.Message) == 1 {
+			zaplog.Logger.Debugf("group=%d 单独 @bot, return menu", groupID)
+			_ = SendGroupAtText(client, groupID, msg.UserID, global.ErrCmdMenu)
+			continue
+		}
+
+		atID, parseErr := strconv.ParseInt(atData.QQ, 10, 64)
+		if parseErr != nil {
+			zaplog.Logger.Errorf("解析 at.qq 失败: %v, raw=%s", parseErr, atData.QQ)
+			continue
+		}
+		if atID != *conf.Cfg.User.UserID {
+			continue
+		}
+
+		second := msg.Message[1]
+		if second.Type != "text" {
+			zaplog.Logger.Debugf("group=%d @bot 后非文本 (type=%s)，return menu", groupID, second.Type)
+			_ = SendGroupAtText(client, groupID, msg.UserID, global.ErrCmdArgFault)
+			continue
+		}
+		td, decErr := model.AsTextData(second.Data)
+		if decErr != nil {
+			zaplog.Logger.Errorf("解析 text segment 失败: %v", decErr)
+			continue
+		}
+		if td.Text == "" || td.Text == " " {
+			continue
+		}
+		zaplog.Logger.Debugf("group=%d 收到指令: %s", groupID, td.Text)
+
+		global.ChanToParseCmd <- model.ChanToParseCmd{
+			GroupID: groupID,
+			UserID:  msg.UserID,
+			Data:    td,
+		}
 	}
-	*LatestSeq = resp.Data.Messages[length-1].MessageSeq
+
+	*latestSeq = tailSeq
 	return nil
 }
