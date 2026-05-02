@@ -15,6 +15,9 @@ zap.log
 # 编译产物
 build/
 
+# 历史/参考代码（迁移参考用，不进 git）
+old/
+
 # 部署密钥与本地 env
 deploy_key
 .env

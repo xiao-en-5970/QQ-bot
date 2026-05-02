@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	github.com/disintegration/imaging v1.6.2
+	github.com/northes/go-moonshot v0.5.2
 	github.com/panjf2000/ants/v2 v2.11.3
 	github.com/spf13/viper v1.20.0
 	go.uber.org/zap v1.27.0

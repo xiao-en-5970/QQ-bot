@@ -15,15 +15,18 @@ import (
 
 // GetNewAtMessage 拉一次 NapCat /get_group_msg_history，识别 @bot 指令并放入解析队列。
 //
-// 关键不变量：
-//  1. 初始化（latestSeq==0）时只记录当前最大 message_seq，不处理任何启动前的历史消息
+// 三道防线杜绝重复回复：
+//  1. **初始化跳历史**：latestSeq==0 时只记录当前最大 message_seq 后立即返回
 //     —— 避免 bot 一启动就把 N 分钟前用户的 @bot 全部回复一遍
-//  2. 后续如果 NapCat 偶发返回空 messages，保持 *latestSeq 不变（绝不重置回 0）
-//     —— 否则下一轮又会触发 init 把"当前最新一条"当成新的处理 → 同一条 @bot 反复回复
-//  3. 处理前先按 message_seq 升序排
-//     —— NapCat 不同版本/不同群的返回顺序未必一致，自己排一遍最稳
-//  4. 双重过滤 bot 自己发的消息：sender.user_id != bot_id && at.qq == bot_id
-//     —— 避免 bot 回复自己
+//  2. **seq 单调推进**：每 tick 处理 seq > latestSeq 的消息，处理完更新到本批最大 seq
+//     —— 即便 NapCat 偶发返回空也保持 *latestSeq 不变，绝不让指针倒退
+//  3. **message_id 全局 LRU 去重**（global.ProcessedMsgIDs，容量 4096）
+//     —— message_seq 在 NapCat 偶发会抖动，但 message_id 是稳定的全局唯一 id；
+//        甚至有人不小心同时跑了两个 bot 实例也不会复发（先到先得）
+//
+// 其他防御措施：
+//   - msg.UserID == botID 直接跳过（防 bot 回复自己）
+//   - 主动按 message_seq 升序排（不依赖 NapCat 返回顺序）
 //
 // 规则：
 //   - segment[0].Type == "at" 且 at.qq == bot_id 才算 @bot
@@ -74,10 +77,17 @@ func GetNewAtMessage(client *http.Client, groupID int64, latestSeq *int64) error
 		if msg.MessageSeq <= *latestSeq {
 			continue
 		}
-		// 第一道防线：bot 自己发的消息直接跳过
+		// 防线 1：bot 自己发的消息直接跳过（防 bot 回复自己）
 		if msg.UserID == botID {
 			continue
 		}
+		// 防线 3（前置）：message_id 已处理过则跳过 —— 这是兜底的最关键一道
+		// Add 是原子的"check + mark"：返回 false = 之前已加过，true = 首次加入
+		if !global.ProcessedMsgIDs.Add(msg.MessageID) {
+			zaplog.Logger.Debugf("group=%d msgid=%d 已处理过，跳过(防重复)", groupID, msg.MessageID)
+			continue
+		}
+
 		if len(msg.Message) == 0 {
 			continue
 		}
@@ -95,22 +105,22 @@ func GetNewAtMessage(client *http.Client, groupID int64, latestSeq *int64) error
 			zaplog.Logger.Errorf("解析 at.qq 失败: %v, raw=%s", parseErr, atData.QQ)
 			continue
 		}
-		// 第二道防线：必须是 @bot 自己（atID == botID）
+		// 防线 2：必须 @ 的就是 bot 自己（atID == botID）
 		if atID != botID {
 			continue
 		}
 
 		// 单独 @bot（无后续 segment）-> 求帮助
 		if len(msg.Message) == 1 {
-			zaplog.Logger.Debugf("group=%d msgseq=%d 单独 @bot, return menu", groupID, msg.MessageSeq)
+			zaplog.Logger.Debugf("group=%d msgid=%d 单独 @bot, return menu", groupID, msg.MessageID)
 			_ = SendGroupAtText(client, groupID, msg.UserID, global.ErrCmdMenu)
 			continue
 		}
 
 		second := msg.Message[1]
 		if second.Type != "text" {
-			zaplog.Logger.Debugf("group=%d msgseq=%d @bot 后非文本 (type=%s)，return menu",
-				groupID, msg.MessageSeq, second.Type)
+			zaplog.Logger.Debugf("group=%d msgid=%d @bot 后非文本 (type=%s)，return menu",
+				groupID, msg.MessageID, second.Type)
 			_ = SendGroupAtText(client, groupID, msg.UserID, global.ErrCmdArgFault)
 			continue
 		}
@@ -123,7 +133,8 @@ func GetNewAtMessage(client *http.Client, groupID int64, latestSeq *int64) error
 		if text == "" {
 			continue
 		}
-		zaplog.Logger.Debugf("group=%d msgseq=%d 收到指令: %s", groupID, msg.MessageSeq, text)
+		zaplog.Logger.Infof("group=%d msgid=%d user=%d 收到指令: %s",
+			groupID, msg.MessageID, msg.UserID, text)
 
 		global.ChanToParseCmd <- model.ChanToParseCmd{
 			GroupID: groupID,

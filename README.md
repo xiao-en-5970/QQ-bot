@@ -8,6 +8,7 @@
 * **pix 关键词[可留空，r18] r18[默认留空]**（返回图片）
 * **help 功能[jm,pix等]**（返回指令使用格式）
 * **github**（返回开源仓库链接）
+* **任意其他文本**：默认转发给 Kimi (Moonshot AI) 用「牧濑红莉栖」人设回复（可选，需配 `GPT_API_KEY` / `MOONSHOT_KEY`；不配就回退到打印菜单）
 
 ## Star History
 
@@ -79,6 +80,11 @@ tools:
   jmcomic_bin: ""    # 留空按 OS 自动选择，详见 conf/conf.go
   img2pdf_bin: ""
   python_bin: ""
+
+gpt:
+  api_key: ""        # 推荐用环境变量 GPT_API_KEY（也兼容老的 MOONSHOT_KEY）
+  max_context_size: 40
+  system_prompt: ""  # 留空使用代码内置的牧濑红莉栖人设
 ```
 
 > **配置优先级**：环境变量 > test.yaml > 代码默认值。生产部署只用 env，YAML 留给本地开发。
@@ -157,6 +163,7 @@ Tag=1.0.0 make tag        # 自动补 v 前缀，相当于 git tag v1.0.0 && git
 * **bot 框架** [NapCat](https://github.com/NapNeko/NapCatQQ)
 * **jm 抓取本子** [JMComic-Crawler-Python](https://github.com/hect0x7/JMComic-Crawler-Python)
 * **图片合 pdf** [img2pdf](https://gitlab.mister-muffin.de/josch/img2pdf) / [salikx/image2pdf](https://github.com/salikx/image2pdf)（Linux 内存优化参考）
+* **AI 聊天** [Moonshot Kimi API](https://platform.moonshot.cn/) via [northes/go-moonshot](https://github.com/northes/go-moonshot)
 
 ## 最后
 **项目还在不断完善，期待更多功能的加入**

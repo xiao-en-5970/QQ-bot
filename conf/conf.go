@@ -69,6 +69,18 @@ type Tools struct {
 	PythonBin  string `mapstructure:"python_bin"`
 }
 
+// Gpt Kimi/Moonshot 聊天能力配置。
+//
+//	APIKey         Moonshot API key；为空则不启用聊天，CmdDefault 回退到打印菜单
+//	               env: GPT_API_KEY；兼容老变量 MOONSHOT_KEY
+//	MaxContextSize 每个用户保留的历史 Q/A 对数量（环形缓冲区大小），默认 40
+//	SystemPrompt   人设/系统提示词，留空使用一个简洁的默认值
+type Gpt struct {
+	APIKey         string `mapstructure:"api_key"`
+	MaxContextSize int64  `mapstructure:"max_context_size"`
+	SystemPrompt   string `mapstructure:"system_prompt"`
+}
+
 type Config struct {
 	Log    Log    `mapstructure:"log"`
 	Server Server `mapstructure:"server"`
@@ -77,6 +89,7 @@ type Config struct {
 	User   User   `mapstructure:"user"`
 	Cache  Cache  `mapstructure:"cache"`
 	Tools  Tools  `mapstructure:"tools"`
+	Gpt    Gpt    `mapstructure:"gpt"`
 }
 
 // Init 加载配置：YAML（test.yaml） + 环境变量，env 优先级最高。
@@ -132,10 +145,13 @@ func bindEnvKeys() {
 		"user.user_id",
 		"cache.tmp_dir", "cache.pdf_tmp_dir", "cache.max_size", "cache.clear_interval",
 		"tools.jmcomic_bin", "tools.img2pdf_bin", "tools.python_bin",
+		"gpt.api_key", "gpt.max_context_size", "gpt.system_prompt",
 	}
 	for _, k := range keys {
 		_ = viper.BindEnv(k)
 	}
+	// 兼容 moonshot SDK 老惯用的环境变量名 MOONSHOT_KEY（无前缀）
+	_ = viper.BindEnv("gpt.api_key", "GPT_API_KEY", "MOONSHOT_KEY")
 }
 
 func applyDefaults(c *Config) {
@@ -170,6 +186,11 @@ func applyDefaults(c *Config) {
 	}
 	if c.Log.LogFile == "" {
 		c.Log.LogFile = filepath.Join(cacheRoot, "logs", "qq-bot.log")
+	}
+
+	// gpt 默认值：环上下文 40 条；prompt 留空让 Init 时给一个简洁的默认人设
+	if c.Gpt.MaxContextSize <= 0 {
+		c.Gpt.MaxContextSize = 40
 	}
 }
 

@@ -51,7 +51,8 @@ func ExecCmd(chanParseCmd model.ChanToParseCmd, client *http.Client) {
 	case "pix":
 		err = CmdPix(client, dataSlice, chanParseCmd.GroupID)
 	default:
-		err = CmdDefault(client, chanParseCmd.GroupID, chanParseCmd.UserID)
+		// 默认走 Kimi 聊天（如果未启用则在 CmdDefault 内回退到菜单）
+		err = CmdDefault(client, chanParseCmd.GroupID, chanParseCmd.UserID, chanParseCmd.Data.Text)
 	}
 	if err != nil {
 		zaplog.Logger.Error(err)

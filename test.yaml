@@ -50,3 +50,12 @@ tools:
   jmcomic_bin: ""
   img2pdf_bin: ""
   python_bin: ""
+
+# Kimi (Moonshot) 聊天配置
+# - api_key 留空则不启用，CmdDefault 走原来的"打印菜单"行为
+# - 生产推荐用环境变量 GPT_API_KEY（也兼容 MOONSHOT_KEY），不要把 key 写进 yaml
+gpt:
+  api_key: ""
+  max_context_size: 40
+  # system_prompt 留空使用代码内置的简洁牧濑红莉栖人设；想自定义的话直接覆盖
+  system_prompt: ""

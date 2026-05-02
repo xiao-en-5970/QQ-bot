@@ -10,6 +10,7 @@ import (
 	"qq_bot/utils/client_pool"
 	"qq_bot/utils/cmd"
 	"qq_bot/utils/cmdline"
+	"qq_bot/utils/kimi"
 	"qq_bot/utils/ticker"
 	zaplog "qq_bot/utils/zap"
 	"time"
@@ -36,6 +37,12 @@ func main() {
 	if err = logic.CheckNapCatAlive(client); err != nil {
 		zaplog.Logger.Errorf("NapCat 连通性检查失败: %v", err)
 		zaplog.Logger.Warnf("继续启动并等待 NapCat 恢复，期间相关 API 调用会失败")
+	}
+
+	// 初始化 Kimi（GPT_API_KEY 为空时返回 (nil, nil)，CmdDefault 自动回退到打印菜单）
+	if global.Kimi, err = kimi.InitKimi(); err != nil {
+		zaplog.Logger.Errorf("Kimi 初始化失败: %v，CmdDefault 将回退到打印菜单", err)
+		global.Kimi = nil
 	}
 
 	if conf.Cfg.User.UserID == nil {
