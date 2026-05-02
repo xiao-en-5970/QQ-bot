@@ -160,9 +160,16 @@ func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, c
 				return nil
 			}
 			if !file_operate.IsDirExists(p.chapDir) {
-				// 这条路径之前完全静默：bot 给群回 ErrCmdJmNotFoundChapter，
-				// 但 stdout/log 啥都不写，看着就像"日志中断了"。
-				// 常见原因：jmcomic 退出 0 但根本没下载（账号风控 / opt.yml 路径错 / QQBOT_JM_DIR 没生效等）。
+				// jmcomic 退出 0 但 chapDir 没生成。区分两类原因：
+				//   1. 上游 API 挂了：output 里会有 RequestRetryAllFailException
+				//      （opt.yml 里写死的 API 域名失效，5 次重试全 404/5xx，跟番号无关）
+				//   2. 番号/章节不存在 / opt.yml 路径配错 / QQBOT_JM_DIR 没生效 等
+				if strings.Contains(string(output), "RequestRetryAllFailException") {
+					zaplog.Logger.Warnf("jm %d: 上游 API 不可用 (RequestRetryAllFailException) -- 检查 opt.yml 的 API 域名",
+						number)
+					_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmAPIDown)
+					return nil
+				}
 				zaplog.Logger.Warnf("jm %d 第 %d 章: jmcomic 退出 0 但 %s 不存在 (本子或章节不存在 / opt.yml 路径未生效?)",
 					number, chapter, p.chapDir)
 				_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmNotFoundChapter)

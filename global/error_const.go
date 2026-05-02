@@ -29,7 +29,11 @@ const (
 	ErrCmdJmUnknownFault    = "jm" + ErrCmdUnknownFault
 	ErrCmdJmNotFound        = "未查找到番号对应的本子..."
 	ErrCmdJmNotFoundChapter = "未查找到章节对应的本子..."
-	InfoCmdJmFindingBook    = "...正在查找本子"
+	// ErrCmdJmAPIDown 区分"番号/章节不存在"和"jmcomic 上游 API 挂掉"两种 case：
+	// jmcomic 输出里出现 RequestRetryAllFailException 时（5 次重试全 404 / 5xx），
+	// 几乎一定是 opt.yml 配的 API 入口域名失效了，跟番号无关，要去更新 opt.yml。
+	ErrCmdJmAPIDown      = "JM 上游 API 暂时不可用（不是你番号写错了），稍后再试或联系管理员更新 opt.yml 的 API 域名"
+	InfoCmdJmFindingBook = "...正在查找本子"
 
 	//github 打印
 	InfoCmdGithubPrint = "项目已开源：https://github.com/xiao-en-5970/QQ-bot"
