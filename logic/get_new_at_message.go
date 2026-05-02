@@ -15,18 +15,20 @@ import (
 
 // GetNewAtMessage 拉一次 NapCat /get_group_msg_history，识别 @bot 指令并放入解析队列。
 //
-// 三道防线杜绝重复回复：
-//  1. **初始化跳历史**：latestSeq==0 时只记录当前最大 message_seq 后立即返回
-//     —— 避免 bot 一启动就把 N 分钟前用户的 @bot 全部回复一遍
-//  2. **seq 单调推进**：每 tick 处理 seq > latestSeq 的消息，处理完更新到本批最大 seq
+// 重复回复防线（三层）：
+//  1. **seq 单调推进**：每 tick 处理 seq > latestSeq 的消息，处理完更新到本批 maxSeq
 //     —— 即便 NapCat 偶发返回空也保持 *latestSeq 不变，绝不让指针倒退
-//  3. **message_id 全局 LRU 去重**（global.ProcessedMsgIDs，容量 4096）
-//     —— message_seq 在 NapCat 偶发会抖动，但 message_id 是稳定的全局唯一 id；
-//        甚至有人不小心同时跑了两个 bot 实例也不会复发（先到先得）
+//  2. **message_id 全局 LRU 去重**（global.ProcessedMsgIDs，容量 4096）
+//     —— 真正的兜底：message_seq 在 NapCat 偶发会抖动，但 message_id 是稳定全局唯一；
+//        即便不小心跑了两个 bot 实例也不会让同一条 @bot 被两边都回复（在同一 LRU 内）
+//  3. **bot 自己发的消息直接跳过**（防 bot 回复自己）
 //
-// 其他防御措施：
-//   - msg.UserID == botID 直接跳过（防 bot 回复自己）
-//   - 主动按 message_seq 升序排（不依赖 NapCat 返回顺序）
+// 启动行为：
+//   latestSeq == 0 时把基线设为 maxSeq-1，让本批"最后一条"也能被处理。
+//   这样 bot 刚启动 / 容器刚重启时，用户刚发的那条 @bot 也能得到回应；
+//   再往前的历史消息被基线挡住、不会被回复。
+//   重启时偶尔出现的"老 bot 已回复 + 新 bot 又回复一次"靠 LRU 防不了（不同进程），
+//   要彻底防只能持久化 last_processed_id，目前不在范围。
 //
 // 规则：
 //   - segment[0].Type == "at" 且 at.qq == bot_id 才算 @bot
@@ -61,11 +63,13 @@ func GetNewAtMessage(client *http.Client, groupID int64, latestSeq *int64) error
 	maxSeq := messages[len(messages)-1].MessageSeq
 
 	if *latestSeq == 0 {
-		// 第一次拉到这个群的消息，只记录基线 seq，不回复任何启动前的历史
-		*latestSeq = maxSeq
-		zaplog.Logger.Debugf("LatestSeq init group=%d seq=%d (跳过启动前 %d 条历史)",
-			groupID, *latestSeq, len(messages))
-		return nil
+		// 启动初始化：把基线设为 maxSeq-1，使"本批最后一条"会被处理。
+		// 这样用户在 bot 重启后立刻 @bot 也能拿到回复；更早的历史不会被回复。
+		// LRU 兜底防止任何路径下的重复处理。
+		baseline := maxSeq - 1
+		zaplog.Logger.Infof("LatestSeq init group=%d 基线=%d (将仅处理本批 tail seq=%d)",
+			groupID, baseline, maxSeq)
+		*latestSeq = baseline
 	}
 
 	if maxSeq <= *latestSeq {
