@@ -3,6 +3,9 @@ package conf
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -10,10 +13,10 @@ import (
 
 var Cfg Config
 
-// Server 对应 NapCat 的 HTTP 接口配置
+// Server 对应 NapCat 的 OneBot11 HTTP 接口配置。
 //
-// Address  : NapCat HTTP 服务的根地址，必须以 / 结尾。例如 http://localhost:3000/
-// AccessToken : NapCat 在 onebot11 配置里 token 字段，没设的话留空
+// Address     NapCat HTTP 服务的根地址，结尾必须带 /，例如 https://bot-http.xiaoen.xyz/
+// AccessToken NapCat onebot11/HTTP 服务器配置的 token；为空表示未启用鉴权
 type Server struct {
 	Address     string `mapstructure:"address"`
 	AccessToken string `mapstructure:"access_token,omitempty"`
@@ -27,7 +30,10 @@ type Pixiv struct {
 type Log struct {
 	StdOutLogLevel string `mapstructure:"std_out_log_level"`
 	LogLevel       string `mapstructure:"log_level"`
+	// LogFile 日志输出文件路径，留空时使用 ./logs/qq-bot.log
+	LogFile string `mapstructure:"log_file"`
 }
+
 type Group struct {
 	GroupID                 []int64 `mapstructure:"group_id,omitempty"`
 	GetGroupHistoryInterval int64   `mapstructure:"get_group_history_interval"`
@@ -38,12 +44,31 @@ type Group struct {
 type User struct {
 	UserID *int64 `mapstructure:"user_id,omitempty"`
 }
+
 type Cache struct {
 	TmpDir        string `mapstructure:"tmp_dir"`
 	PdfTmpDir     string `mapstructure:"pdf_tmp_dir"`
 	MaxSize       int64  `mapstructure:"max_size"`
 	ClearInterval int64  `mapstructure:"clear_interval"`
 }
+
+// Tools 跨平台外部工具命令路径。
+//
+//	JmcomicBin  抓本子用的 jmcomic 命令
+//	  - Windows 默认 ./package/jmcomic.exe（PyInstaller 打包版）
+//	  - Linux   默认 jmcomic（pip install jmcomic 后在 PATH 中）
+//	Img2pdfBin  图片转 pdf 用的 img2pdf 命令
+//	  - Windows 默认 ./package/img2pdf.exe
+//	  - Linux   默认 img2pdf（pip install img2pdf 后在 PATH 中）
+//	PythonBin   Python 解释器（仅当 Img2pdfBin 是 .py 脚本时才用），默认 python3
+//
+// 任意一个均可被环境变量 TOOLS_JMCOMIC_BIN / TOOLS_IMG2PDF_BIN / TOOLS_PYTHON_BIN 覆盖。
+type Tools struct {
+	JmcomicBin string `mapstructure:"jmcomic_bin"`
+	Img2pdfBin string `mapstructure:"img2pdf_bin"`
+	PythonBin  string `mapstructure:"python_bin"`
+}
+
 type Config struct {
 	Log    Log    `mapstructure:"log"`
 	Server Server `mapstructure:"server"`
@@ -51,28 +76,103 @@ type Config struct {
 	Group  Group  `mapstructure:"group"`
 	User   User   `mapstructure:"user"`
 	Cache  Cache  `mapstructure:"cache"`
+	Tools  Tools  `mapstructure:"tools"`
 }
 
+// Init 加载配置：YAML（test.yaml） + 环境变量，env 优先级最高。
+//
+// 路径搜索：
+//   - ./test.yaml          本地开发
+//   - /app/test.yaml       Docker 容器
+//   - /etc/qq-bot/test.yaml 系统级
+//
+// 生产部署（Docker）通常不挂 yaml，全部走环境变量（HFUT 模式：宿主机 /qq-bot-server/.env -> --env-file）。
+// 本地开发（Windows）继续用 ./test.yaml 即可，env 不存在时不会覆盖。
 func Init() (err error) {
 	viper.SetConfigName("test")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(".")
+	viper.AddConfigPath("/app")
+	viper.AddConfigPath("/etc/qq-bot")
+
+	// 环境变量映射：server.address -> SERVER_ADDRESS
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	bindEnvKeys()
 
 	if err = viper.ReadInConfig(); err != nil {
-		var configFileNotFoundError viper.ConfigFileNotFoundError
-		if errors.As(err, &configFileNotFoundError) {
-			return errors.New(fmt.Sprintf("配置文件未找到: %v", err))
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			return fmt.Errorf("配置文件读取失败: %w", err)
 		}
+		// 没找到 yaml 也 OK，全部从 env 读
 	}
 
 	if err = viper.Unmarshal(&Cfg); err != nil {
-
-		return errors.New(fmt.Sprintf("无法解析配置文件: %v", err))
+		return fmt.Errorf("无法解析配置: %w", err)
 	}
 
 	if Cfg.Server.Address != "" && !strings.HasSuffix(Cfg.Server.Address, "/") {
 		Cfg.Server.Address = Cfg.Server.Address + "/"
 	}
 
+	applyDefaults(&Cfg)
 	return nil
+}
+
+// bindEnvKeys 显式 BindEnv 让 Unmarshal 也能拿到 env，否则 viper 默认只在 Get 时读 env。
+//
+// 注：group.group_id（[]int64）暂不支持环境变量，生产建议留空让 main.go 自动从 NapCat 拉群列表。
+func bindEnvKeys() {
+	keys := []string{
+		"server.address", "server.access_token",
+		"log.std_out_log_level", "log.log_level", "log.log_file",
+		"pixiv.pixiv_address", "pixiv.size",
+		"group.get_group_history_interval", "group.update_group_list_interval", "group.retry",
+		"user.user_id",
+		"cache.tmp_dir", "cache.pdf_tmp_dir", "cache.max_size", "cache.clear_interval",
+		"tools.jmcomic_bin", "tools.img2pdf_bin", "tools.python_bin",
+	}
+	for _, k := range keys {
+		_ = viper.BindEnv(k)
+	}
+}
+
+func applyDefaults(c *Config) {
+	if c.Tools.PythonBin == "" {
+		c.Tools.PythonBin = "python3"
+	}
+	if c.Tools.JmcomicBin == "" {
+		if isWindows() {
+			c.Tools.JmcomicBin = "./package/jmcomic.exe"
+		} else {
+			c.Tools.JmcomicBin = "jmcomic"
+		}
+	}
+	if c.Tools.Img2pdfBin == "" {
+		if isWindows() {
+			c.Tools.Img2pdfBin = "./package/img2pdf.exe"
+		} else {
+			c.Tools.Img2pdfBin = "img2pdf"
+		}
+	}
+
+	// 缓存与日志一律放到系统临时目录下的 qq-bot 子目录
+	//   Linux / Mac : /tmp/qq-bot/...
+	//   Windows     : %TEMP%/qq-bot/...
+	// 不再污染工作目录；Docker 部署时建议宿主机 /qq-bot-server/cache:/tmp/qq-bot 整个挂出来
+	cacheRoot := filepath.Join(os.TempDir(), "qq-bot")
+	if c.Cache.TmpDir == "" {
+		c.Cache.TmpDir = filepath.Join(cacheRoot, "jm")
+	}
+	if c.Cache.PdfTmpDir == "" {
+		c.Cache.PdfTmpDir = filepath.Join(cacheRoot, "pdf")
+	}
+	if c.Log.LogFile == "" {
+		c.Log.LogFile = filepath.Join(cacheRoot, "logs", "qq-bot.log")
+	}
+}
+
+func isWindows() bool {
+	return runtime.GOOS == "windows"
 }

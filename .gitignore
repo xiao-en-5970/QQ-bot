@@ -1,5 +1,27 @@
+# 缓存与日志
 pdftmp/
 tmp/
-.idea/
-.venv/
+logs/
 *.log
+zap.log
+
+# IDE
+.idea/
+.vscode/
+
+# Python venv（本地调试 jmcomic 时可能用到）
+.venv/
+
+# 编译产物
+build/
+
+# 部署密钥与本地 env
+deploy_key
+.env
+.env.*
+!.env.example
+!deploy/env.production.example
+
+# macOS
+.DS_Store
+**/.DS_Store

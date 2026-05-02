@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"qq_bot/conf"
 	"qq_bot/global"
 	"qq_bot/logic"
@@ -15,7 +16,7 @@ import (
 
 func CmdPix(client *http.Client, argv []string, group_id int64) (err error) {
 	var filename string
-	var filepath string
+	var localPath string
 	var resp *http.Response
 	for {
 		keyword := ""
@@ -42,7 +43,9 @@ func CmdPix(client *http.Client, argv []string, group_id int64) (err error) {
 			return err
 		}
 		filename = fmt.Sprintf("%d.jpg", pid)
-		filepath = "./tmp/" + filename
+		// 缓存目录默认在 os.TempDir()/qq-bot/jm，先确保存在
+		_ = os.MkdirAll(conf.Cfg.Cache.TmpDir, 0755)
+		localPath = filepath.Join(conf.Cfg.Cache.TmpDir, filename)
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			return err
@@ -58,13 +61,13 @@ func CmdPix(client *http.Client, argv []string, group_id int64) (err error) {
 
 	global.TmpMtx.RLock()
 	defer global.TmpMtx.RUnlock()
-	file, err := os.Create(filepath) // 可修改文件名和扩展名
+	file, err := os.Create(localPath)
 
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
 		return err
 	}
-	err = imgcut.ImgCut(filepath)
+	err = imgcut.ImgCut(localPath)
 	if err != nil {
 		return err
 	}
@@ -79,7 +82,7 @@ func CmdPix(client *http.Client, argv []string, group_id int64) (err error) {
 
 	file.Close()
 
-	if err = logic.UploadGroupFile(client, group_id, filepath, filename); err != nil {
+	if err = logic.UploadGroupFile(client, group_id, localPath, filename); err != nil {
 		return err
 	}
 

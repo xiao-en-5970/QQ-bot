@@ -4,34 +4,36 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"os"
+	"path/filepath"
 	"qq_bot/conf"
 )
 
 var Logger *zap.SugaredLogger
 var LogFile *os.File
 
+// Init 初始化 zap 日志器，输出到 文件 + 标准输出。
+//
+// 文件路径取自 conf.Cfg.Log.LogFile（默认走 os.TempDir 下的 qq-bot/logs/qq-bot.log），
+// 上层目录不存在会自动 mkdir。Docker 部署时建议宿主机 /qq-bot-server/cache:/tmp/qq-bot 整段挂出来。
 func Init() {
-	// 打开日志文件
-	LogFile, err := os.OpenFile("zap.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	logPath := conf.Cfg.Log.LogFile
+	if logPath == "" {
+		logPath = filepath.Join(os.TempDir(), "qq-bot", "logs", "qq-bot.log")
+	}
+	if dir := filepath.Dir(logPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			panic(err)
+		}
+	}
+
+	var err error
+	LogFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		panic(err)
 	}
-	var level zapcore.Level
-	switch conf.Cfg.Log.LogLevel {
-	case "debug":
-		level = zap.DebugLevel
-	case "info":
-		level = zap.InfoLevel
-	case "warn":
-		level = zap.WarnLevel
-	case "error":
-		level = zap.ErrorLevel
-	case "fatal":
-		level = zap.FatalLevel
-	default:
-		level = zap.WarnLevel
-	}
-	// 创建一个写入文件的核心
+
+	fileLevel := parseLevel(conf.Cfg.Log.LogLevel)
+
 	fileEncoderConfig := zap.NewProductionEncoderConfig()
 	fileEncoderConfig.TimeKey = "timestamp"
 	fileEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
@@ -40,40 +42,41 @@ func Init() {
 	fileCore := zapcore.NewCore(
 		fileEncoder,
 		zapcore.AddSync(LogFile),
-		level, // 设置日志级别
+		fileLevel,
 	)
 
-	// 创建一个写入标准输出的核心
 	consoleEncoderConfig := zap.NewProductionEncoderConfig()
 	consoleEncoderConfig.TimeKey = "timestamp"
 	consoleEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	consoleEncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder // 彩色输出
+	consoleEncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 
-	switch conf.Cfg.Log.StdOutLogLevel {
-	case "debug":
-		level = zap.DebugLevel
-	case "info":
-		level = zap.InfoLevel
-	case "warn":
-		level = zap.WarnLevel
-	case "error":
-		level = zap.ErrorLevel
-	case "fatal":
-		level = zap.FatalLevel
-	default:
-		level = zap.WarnLevel
-	}
+	consoleLevel := parseLevel(conf.Cfg.Log.StdOutLogLevel)
 	consoleEncoder := zapcore.NewConsoleEncoder(consoleEncoderConfig)
 	consoleCore := zapcore.NewCore(
 		consoleEncoder,
 		zapcore.AddSync(os.Stdout),
-		level, // 设置日志级别
+		consoleLevel,
 	)
 
-	// 组合多个核心，实现同时输出到文件和标准输出
 	core := zapcore.NewTee(fileCore, consoleCore)
-	// 创建 logger
 	l := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
 	Logger = l.Sugar()
-	Logger.Infoln("日志初始化成功")
+	Logger.Infof("日志初始化成功，日志文件: %s", logPath)
+}
+
+func parseLevel(s string) zapcore.Level {
+	switch s {
+	case "debug":
+		return zap.DebugLevel
+	case "info":
+		return zap.InfoLevel
+	case "warn":
+		return zap.WarnLevel
+	case "error":
+		return zap.ErrorLevel
+	case "fatal":
+		return zap.FatalLevel
+	default:
+		return zap.WarnLevel
+	}
 }

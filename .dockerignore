@@ -1,0 +1,35 @@
+# 减小构建上下文 / 防止本地大文件污染镜像
+.git
+.github
+.idea
+.vscode
+.DS_Store
+**/.DS_Store
+
+# 测试产物
+*.test
+*_test.go
+coverage.*
+*.coverprofile
+
+# 不让 Windows 工具进 Linux 镜像
+package/*.exe
+
+# 旧版本可能遗留的项目根目录缓存
+tmp/
+pdftmp/
+logs/
+*.log
+
+# 文档
+*.md
+doc/
+
+# 本地秘钥
+.env
+.env.*
+!.env.example
+deploy_key
+
+# 已经有现成的 Linux 二进制时只 COPY 它
+build/main.exe

@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"qq_bot/conf"
 	"qq_bot/global"
 	"qq_bot/logic"
 	"qq_bot/utils/file_operate"
@@ -14,6 +17,32 @@ import (
 	"strconv"
 	"strings"
 )
+
+// jmPaths 把缓存路径集中算一次，避免重复 filepath.Join。
+type jmPaths struct {
+	tmpRoot   string // jm 下载根目录，对应 conf.Cache.TmpDir
+	pdfRoot   string // pdf 缓存根目录，对应 conf.Cache.PdfTmpDir
+	chapDir   string // {tmpRoot}/{number}/{chapter}
+	albumDir  string // {tmpRoot}/{number}
+	pdfFile   string // {pdfRoot}/{number}_{chapter}.pdf
+	pdfName   string // {number}_{chapter}.pdf（上传到群文件用的展示名）
+	jmOption  string // 传给 jmcomic --option= 的 yml 路径，绝对路径以避开 cmd.Dir 影响
+}
+
+func newJmPaths(number, chapter int64) jmPaths {
+	tmp := conf.Cfg.Cache.TmpDir
+	pdf := conf.Cfg.Cache.PdfTmpDir
+	optAbs, _ := filepath.Abs("./package/jmoption/opt.yml")
+	return jmPaths{
+		tmpRoot:  tmp,
+		pdfRoot:  pdf,
+		chapDir:  filepath.Join(tmp, fmt.Sprint(number), fmt.Sprint(chapter)),
+		albumDir: filepath.Join(tmp, fmt.Sprint(number)),
+		pdfFile:  filepath.Join(pdf, fmt.Sprintf("%d_%d.pdf", number, chapter)),
+		pdfName:  fmt.Sprintf("%d_%d.pdf", number, chapter),
+		jmOption: optAbs,
+	}
+}
 
 func CmdJm(client *http.Client, dataSlice []string, group_id int64, user_id int64) (err error) {
 	chapter := make([]int64, 0, 5)
@@ -93,79 +122,60 @@ func CmdJm(client *http.Client, dataSlice []string, group_id int64, user_id int6
 func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, chapter int64, isEnd bool) (err error) {
 	global.TmpMtx.RLock()
 	defer global.TmpMtx.RUnlock()
-	//判断缓存里面是否存在之前搜过的本子
-	err, exist := file_operate.FindCache(fmt.Sprintf("./pdftmp/%d_%d.pdf", number, chapter))
+
+	p := newJmPaths(number, chapter)
+
+	// 判断缓存里面是否存在之前搜过的本子
+	err, exist := file_operate.FindCache(p.pdfFile)
 	if exist {
-		err = logic.UploadGroupFile(client, group_id, fmt.Sprintf("./pdftmp/%d_%d.pdf", number, chapter), fmt.Sprintf("%d_%d.pdf", number, chapter))
-		if err != nil {
+		if err = logic.UploadGroupFile(client, group_id, p.pdfFile, p.pdfName); err != nil {
 			zaplog.Logger.Warn(err)
 		}
 	} else {
-		if !file_operate.IsDirExists(fmt.Sprintf("./tmp/%d/%d", number, chapter)) {
+		if !file_operate.IsDirExists(p.chapDir) {
 			zaplog.Logger.Infof("接收到番号 %d 第 %d 章", number, chapter)
-			if err = to_zip.MkDir("./tmp"); err != nil {
-				zaplog.Logger.Warnf("创建./tmp失败: %v", err)
+			if err = to_zip.MkDir(p.tmpRoot); err != nil {
+				zaplog.Logger.Warnf("创建 %s 失败: %v", p.tmpRoot, err)
 			}
-			cmd := exec.Command("./package/jmcomic.exe", fmt.Sprint(number), "--option=./package/jmoption/opt.yml")
-			// 运行命令并获取输出结果
+			// jmcomic 命令跨平台：Windows 默认用打包好的 .exe，Linux 走 pip install jmcomic 后的 CLI
+			// 命令行/参数完全一致，由 conf.Tools.JmcomicBin 决定走哪个
+			// 把 jm 缓存目录通过环境变量传给 opt.yml 里的 ${QQBOT_JM_DIR}，避免 jmcomic 把图下到当前目录
+			cmd := exec.Command(conf.Cfg.Tools.JmcomicBin, fmt.Sprint(number), "--option="+p.jmOption)
+			cmd.Env = append(os.Environ(), "QQBOT_JM_DIR="+p.tmpRoot)
 			output, err := cmd.CombinedOutput()
 			if err != nil {
-				zaplog.Logger.Warnf("执行命令时发生错误/中途退出: %v", err)
+				zaplog.Logger.Warnf("执行 jmcomic 出错/中途退出: %v\noutput=%s", err, output)
 				_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmUnknownFault)
 				return err
 			}
-			var builder strings.Builder
-			builder.Write(output)
-
-			zaplog.Logger.Debugf("命令输出结果:%s", builder.String())
-			//如果调用jm接口没报错
-			if strings.HasPrefix(builder.String(), "Exception") {
+			zaplog.Logger.Debugf("jmcomic 输出结果: %s", output)
+			if strings.HasPrefix(string(output), "Exception") {
 				zaplog.Logger.Warnf("jm %d 查找出了未知问题", number)
 				_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmNotFound)
 				return nil
 			}
-			if !file_operate.IsDirExists(fmt.Sprintf("./tmp/%d/%d", number, chapter)) {
+			if !file_operate.IsDirExists(p.chapDir) {
 				_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmNotFoundChapter)
 				return nil
 			}
 		}
-		err = to_pdf.ToPdf(fmt.Sprintf("./tmp/%d/%d", number, chapter), fmt.Sprintf("./pdftmp/%d_%d.pdf", number, chapter))
-		if err != nil {
+		if err = to_pdf.ToPdf(p.chapDir, p.pdfFile); err != nil {
 			zaplog.Logger.Warn(err)
 			_ = logic.SendGroupAtText(client, group_id, user_id, global.ErrCmdJmUnknownFault)
 			return err
 		}
-		err = logic.UploadGroupFile(client, group_id, fmt.Sprintf("./pdftmp/%d_%d.pdf", number, chapter), fmt.Sprintf("%d_%d.pdf", number, chapter))
-		if err != nil {
+		if err = logic.UploadGroupFile(client, group_id, p.pdfFile, p.pdfName); err != nil {
 			zaplog.Logger.Warn(err)
 			return err
 		}
-
-		//本次不采用转换为zip，因为群u觉得麻烦
-		//err = to_zip.Tozip("./tmp", "./ziptmp", fmt.Sprintf("%d.zip", number))
-		//if err != nil {
-		//	zaplog.Logger.Error(err)
-		//}
-		//err = logic.UploadGroupFile(client, group_id, fmt.Sprintf("./ziptmp/%d.zip", number), fmt.Sprintf("%d.zip", number))
-		//if err != nil {
-		//	zaplog.Logger.Error(err)
-		//}
-		//zaplog.Logger.Infof("%d.zip上传成功\n", number)
-		//err = to_zip.RemoveDir(fmt.Sprintf("./tmp/%d", number))
-		//if err != nil {
-		//	zaplog.Logger.Warn(err)
-		//	return err
-		//}
-
 	}
+
 	if isEnd {
 		latestChap := 0
-		if !file_operate.IsDirExists(fmt.Sprintf("./tmp/%d", number)) {
-			latestChap = 0
-		} else {
+		if file_operate.IsDirExists(p.albumDir) {
 			latestChap = 1
 			for {
-				if !file_operate.IsDirExists(fmt.Sprintf("./tmp/%d/%d", number, latestChap)) {
+				if !file_operate.IsDirExists(filepath.Join(p.tmpRoot, fmt.Sprint(number), fmt.Sprint(latestChap))) {
 					break
 				}
 				latestChap++
@@ -173,7 +183,7 @@ func Jmcomic(client *http.Client, group_id int64, user_id int64, number int64, c
 		}
 		if latestChap > 0 {
 			zaplog.Logger.Debugf("最新章节获取成功")
-			logic.SendGroupAtText(client, group_id, user_id, fmt.Sprintf("jm%d 最新章节连载至第%d章", number, latestChap-1))
+			_ = logic.SendGroupAtText(client, group_id, user_id, fmt.Sprintf("jm%d 最新章节连载至第%d章", number, latestChap-1))
 		}
 	}
 	return nil

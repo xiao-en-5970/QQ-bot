@@ -2,6 +2,7 @@
 log:
   std_out_log_level: debug #输出到标准输出的log等级(debug/info/warn/error)
   log_level: debug #输出到日志的log等级(debug/info/warn/error)
+  log_file: "" #日志文件路径，留空时默认使用 系统临时目录/qq-bot/logs/qq-bot.log
 
 # api相关配置（NapCat HTTP 服务）
 server:
@@ -9,7 +10,7 @@ server:
   # 优先用反代 https://bot-http.xiaoen.xyz/，无法访问时换 https://cat.xiaoen.xyz:3000/
   address: "https://bot-http.xiaoen.xyz/"
   # NapCat WebUI -> 网络配置 -> HTTP server 中的 token；不填则不带 Authorization
-  access_token: "V:iqg46Jnvx.El3&"
+  access_token: "http-theo5970"
 
 # pixiv 相关配置
 pixiv:
@@ -32,8 +33,20 @@ user:
   user_id: # qqbot用户id，为空则自动获得当前bot账号
 
 # 缓存相关配置
+# 注：默认全部放在 系统临时目录/qq-bot/ 下（Linux: /tmp/qq-bot；Windows: %TEMP%/qq-bot），不再污染工作目录
+# 留空即按默认值；要自定义直接填绝对路径
 cache:
-  tmp_dir: "./tmp" # jm下载的缓存目标文件夹
-  pdf_tmp_dir: "./pdftmp" # 图片合成pdf的缓存文件夹
+  tmp_dir: "" # jm/pix 下载缓存目录，留空 -> os.TempDir/qq-bot/jm
+  pdf_tmp_dir: "" # 图片合成 pdf 的缓存目录，留空 -> os.TempDir/qq-bot/pdf
   max_size: 1024 # [单位:MB]缓存最大值
   clear_interval: 1200 # [单位:秒]清理缓存间隔时间，间隔越少，缓存清理越及时，但是会阻塞文件操作
+
+# 跨平台外部工具命令路径
+# 留空时按 OS 自动选择：
+#   Windows: ./package/jmcomic.exe / ./package/img2pdf.exe
+#   Linux  : jmcomic / img2pdf  (容器里 pip install 后在 PATH)
+# 也可在生产部署时通过环境变量 TOOLS_JMCOMIC_BIN / TOOLS_IMG2PDF_BIN / TOOLS_PYTHON_BIN 覆盖
+tools:
+  jmcomic_bin: ""
+  img2pdf_bin: ""
+  python_bin: ""

@@ -77,7 +77,11 @@ dir_rule:
   # base_dir: 根目录。
   # 此配置也支持引用环境变量，例如
   # base_dir: ${JM_DIR}/下载文件夹/
-  base_dir: ./tmp
+  #
+  # QQ-bot 在 utils/cmd/cmd_jm.go 里调用 jmcomic 时会自动注入 QQBOT_JM_DIR
+  # 默认值是 os.TempDir()/qq-bot/jm（Linux: /tmp/qq-bot/jm；Windows: %TEMP%/qq-bot/jm），
+  # 也可被环境变量 CACHE_TMP_DIR 覆盖
+  base_dir: ${QQBOT_JM_DIR}
 
   # rule: 规则dsl。
   rule: Bd_Aid_Pindex

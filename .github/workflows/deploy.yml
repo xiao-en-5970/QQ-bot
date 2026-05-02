@@ -1,0 +1,140 @@
+name: CI/CD
+
+# 分支 push：仅静态分析；tag push：静态分析 + 在 Actions 编译 Linux 二进制 + rsync + 部署机打包镜像并运行
+# 容器名：qq-bot-server，无端口映射（QQ-bot 是轮询型 bot，不接收外部请求）
+# 配置走 HFUT 模式：宿主机 /qq-bot-server/.env -> docker run --env-file，YAML 不进容器
+permissions:
+  contents: read
+  actions: read
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # 1. 静态分析（分支与 tag 均执行；不编译）
+  check:
+    name: 1. 静态分析
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: 静态分析
+        run: go vet ./...
+
+  # 2. 部署（仅 tag：Actions 编译 build/app，部署机 docker build 打包容器）
+  deploy:
+    name: 2. 部署
+    needs: check
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: 编译 Linux 二进制（部署机只 COPY 进镜像，无需 Go）
+        run: |
+          mkdir -p build
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o build/app .
+
+      - name: 同步代码并在部署机构建、启动
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KEY_B64: ${{ secrets.DEPLOY_SSH_KEY_B64 }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          [ -n "$DEPLOY_HOST" ] || { echo "::error::缺少 Secrets: DEPLOY_HOST"; exit 1; }
+          [ -n "$DEPLOY_USER" ] || { echo "::error::缺少 Secrets: DEPLOY_USER"; exit 1; }
+          [ -n "$DEPLOY_SSH_KEY$DEPLOY_SSH_KEY_B64" ] || { echo "::error::缺少 Secrets: 至少配置 DEPLOY_SSH_KEY 或 DEPLOY_SSH_KEY_B64"; exit 1; }
+
+          mkdir -p ~/.ssh
+          if [ -n "$DEPLOY_SSH_KEY_B64" ]; then
+            echo "$DEPLOY_SSH_KEY_B64" | base64 -d > ~/.ssh/deploy_key
+          else
+            printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          fi
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null || { echo "私钥格式无效"; exit 1; }
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          # rsync 默认走 ssh，但不会自动用 -i；须与 SSH_BASE 使用同一私钥，否则会 publickey 失败
+          RSYNC_RSH='ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o IdentitiesOnly=yes'
+          SSH_BASE=(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o IdentitiesOnly=yes "${DEPLOY_USER}@${DEPLOY_HOST}")
+
+          echo "[1/3] 解析部署目录..."
+          REMOTE_DEST=$("${SSH_BASE[@]}" bash -s << EOF
+          export DEPLOY_PATH='${DEPLOY_PATH}'
+          printf '%s' "\${DEPLOY_PATH:-\$HOME/qq-bot-server}"
+          EOF
+          )
+          REMOTE_DEST=$(printf '%s' "$REMOTE_DEST" | tr -d '\r\n')
+          echo "远程目录: $REMOTE_DEST"
+
+          echo "[2/3] rsync（含 build/app 与 Dockerfile）..."
+          "${SSH_BASE[@]}" "mkdir -p $(printf '%q' "$REMOTE_DEST")"
+          rsync -az --delete \
+            -e "$RSYNC_RSH" \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'package/*.exe' \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DEST}/"
+
+          echo "[3/3] docker build（仅打包预编译二进制 + Python 工具，部署机本地缓存层）并启动..."
+          "${SSH_BASE[@]}" bash -s << EOF
+          set -e
+          DEST="\${DEPLOY_PATH:-\$HOME/qq-bot-server}"
+          cd "\$DEST"
+
+          # /qq-bot-server/.env：必须先在宿主机准备好（含 SERVER_ADDRESS、SERVER_ACCESS_TOKEN 等，参考 deploy/env.production.example）
+          ENV_FILE='/qq-bot-server/.env'
+          [ -f "\$ENV_FILE" ] || { echo "::error::需先在宿主机创建 \$ENV_FILE 并填入环境变量（参考 deploy/env.production.example）"; exit 1; }
+          grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "\$ENV_FILE" > /tmp/.env.qq-bot.docker
+          [ -s /tmp/.env.qq-bot.docker ] || { echo '::error::env 文件中无有效 KEY=VALUE 行'; exit 1; }
+
+          # 持久化目录：宿主机 /qq-bot-server/cache 一次性挂到容器 /tmp/qq-bot
+          # 容器内 jm 下载 -> /tmp/qq-bot/jm，pdf 缓存 -> /tmp/qq-bot/pdf，日志 -> /tmp/qq-bot/logs
+          mkdir -p /qq-bot-server/cache/jm /qq-bot-server/cache/pdf /qq-bot-server/cache/logs
+          chmod -R 755 /qq-bot-server/cache
+
+          export DOCKER_BUILDKIT=1
+          docker build -t "qq-bot-server:${TAG}" -t qq-bot-server:latest -f Dockerfile .
+
+          docker stop qq-bot-server 2>/dev/null || true
+          docker rm qq-bot-server 2>/dev/null || true
+
+          # 不映射端口（轮询型 bot），单挂载缓存目录 + 注入 env
+          docker run -d --name qq-bot-server \
+            --restart unless-stopped \
+            --env-file /tmp/.env.qq-bot.docker \
+            -v /qq-bot-server/cache:/tmp/qq-bot \
+            "qq-bot-server:${TAG}"
+
+          sleep 3
+          if ! docker ps --filter name=qq-bot-server --filter status=running -q | grep -q .; then
+            echo '::error::容器启动失败'
+            docker logs qq-bot-server 2>&1 || true
+            exit 1
+          fi
+          echo '=== 部署成功 ==='
+          docker image prune -f
+          docker ps --filter name=qq-bot-server
+          docker logs --tail 30 qq-bot-server
+          EOF
