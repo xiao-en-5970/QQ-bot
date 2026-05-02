@@ -13,12 +13,12 @@ import (
 	"strings"
 )
 
-// 解析指令
+// ParseCmd 必须由 main 在 `go ParseCmd(...)` 之前调用 global.Wg.Add(1)，
+// 协程内部只负责 Done（避免 main 抢跑 Wg.Wait race，详见 main.go 注释）。
 func ParseCmd(ctx context.Context) {
-	global.Wg.Add(1)
+	defer global.Wg.Done()
 	zaplog.Logger.Debugf("协程ParseCmd启动")
 	defer zaplog.Logger.Debugf("协程ParseCmd退出")
-	defer global.Wg.Done()
 	for {
 		select {
 		case <-ctx.Done():

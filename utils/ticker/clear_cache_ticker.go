@@ -9,11 +9,12 @@ import (
 	"time"
 )
 
+// ClearCacheTicker 必须由 main 在 `go ClearCacheTicker(...)` 之前调用 global.Wg.Add(1)，
+// 协程内部只负责 Done（避免 main 抢跑 Wg.Wait race，详见 main.go 注释）。
 func ClearCacheTicker(ctx context.Context) {
-	global.Wg.Add(1)
+	defer global.Wg.Done()
 	ticker := time.NewTicker(time.Duration(conf.Cfg.Cache.ClearInterval) * time.Second) // 120秒间隔
 	defer ticker.Stop()                                                                 // 程序退出时停止
-	defer global.Wg.Done()
 	zaplog.Logger.Debugf("协程ClearCacheTicker启动")
 	defer zaplog.Logger.Debugf("协程ClearCacheTicker退出")
 	for {

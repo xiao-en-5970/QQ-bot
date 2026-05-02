@@ -73,22 +73,36 @@ func main() {
 		}
 	}
 
+	// 收尾顺序（LIFO）：log file → log sync → 池释放 → channel 关闭。
+	// 这些放在 Wg.Wait 之前 defer，是为了即使 Wg.Wait 永远不返回（被信号 kill）也能注册上。
+	defer zaplog.LogFile.Close()
+	defer zaplog.Logger.Sync()
+	defer global.ThreadPool.Release()
+	defer close(global.ChanToParseCmd)
+
+	// === 启动后台协程 =======================================================
+	// Wg.Add(1) 必须由父协程在 `go ...` 之前调用，否则父协程可能"抢跑"到 Wg.Wait()
+	// 时各 goroutine 还没来得及自己 Add，counter 仍是 0，Wait 立刻返回，
+	// main 直接退出，bot 一启动就死。这是之前 time.Sleep 兜底掩盖的同一个 bug。
+	const backgroundJobs = 4
+	for i := 0; i < backgroundJobs; i++ {
+		global.Wg.Add(1)
+	}
 	go ticker.WaitExit(cancel)
 	go cmd.ParseCmd(ctx)
 	go ticker.ClearCacheTicker(ctx)
-
 	// WebSocket 长连接，唯一的"消息入口"。断线指数退避自动重连，详见 wsclient.Run 注释。
 	// 老的轮询方案（GroupTicker / UpdateGroupListTicker）已弃用，原因见 utils/wsclient 包注释。
 	go wsclient.Run(ctx)
 
+	// pprof 是 daemon 性质的调试入口，不参与 Wg（挂了也不该影响 bot 退出语义）。
 	go func() {
 		zaplog.Logger.Debugf("协程\"net/http/pprof\"启动")
 		defer zaplog.Logger.Debugf("协程\"net/http/pprof\"退出")
 		zaplog.Logger.Infoln(http.ListenAndServe("localhost:6060", nil))
 	}()
+
+	zaplog.Logger.Infof("bot 启动完成，等待信号 / WS 事件...")
 	global.Wg.Wait()
-	defer close(global.ChanToParseCmd)
-	defer global.ThreadPool.Release()
-	defer zaplog.Logger.Sync()
-	defer zaplog.LogFile.Close()
+	zaplog.Logger.Infof("bot 全部协程已退出，main 返回")
 }

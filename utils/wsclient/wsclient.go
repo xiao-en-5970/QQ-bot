@@ -34,8 +34,10 @@ import (
 //
 // 断线 / 网络抖动时会自动重连，指数退避（1s, 2s, 4s, ... 上限 30s），
 // 一旦成功建立连接就把退避重置回 1s。
+//
+// 调用约定：必须由 main 在 `go Run(ctx)` 之前调用 global.Wg.Add(1)，
+// 协程内部只负责 Done（避免 main 抢跑 Wg.Wait race，详见 main.go 注释）。
 func Run(ctx context.Context) {
-	global.Wg.Add(1)
 	defer global.Wg.Done()
 	zaplog.Logger.Debugf("协程WSListener启动")
 	defer zaplog.Logger.Debugf("协程WSListener退出")
