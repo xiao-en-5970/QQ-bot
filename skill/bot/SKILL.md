@@ -119,6 +119,27 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 - **禁止**：让 Kimi 跨用户操作（操作 A 用户的商品时不能传 B 的 qq_number；下层鉴权也会兜底）
 - **建议**：先调"查询类"工具确认状态（list_my_active_goods / list_recent_open_questions）再调"写入类"工具
 
+### 商品去重（避免重复上架）
+
+同一发布者在 QQ 群里反复发**参数高度相似**的商品（典型场景：用户先发"出鞋架 6元"，过几个小时又发了一遍来顶帖，或者隔几天补图重发），bot 不能重复创建——会让 hfut 列表被同款商品污染。
+
+**bot 层去重（P1 必须做）**：
+1. `publish_good` 工具调用前**先调** `list_my_active_goods(qq_number)` 拿该用户当前在售清单
+2. 把候选项一起喂给 LLM，让模型判断"我现在想发的这条，跟列表里某条是不是几乎一样？"
+3. 是 → 不调 `publish_good`，群里 @ 用户回："你这条像之前发的'XXX'，没重复上架（如要重发请先 @bot 下架旧的）"
+4. 否 → 走正常 publish_good 流程
+
+**hfut 后端兜底去重（P1 必须做）**：
+- service 层加 `IsLikelyDuplicate(user_id, category, title, price)` 检查
+- 判定标准：同一 user + 同一 category + 标题相似度 ≥ 0.8（ngram / Jaccard）+ 价格差 ≤ 0.1 倍 + 7 天内
+- 命中：`POST /goods` 返回 409 + 已存在的商品 ID，让 bot 知道"已存在"
+- 即使 bot 因为模型幻觉漏判，后端也兜底拒绝创建——避免任何路径下污染数据
+- **管理员 / 主账号通过 app 上架不受此限制**（人为决定就允许重发）
+
+**误判保险**：
+- 如果用户明确说"我重新发一遍 XX 因为图模糊了" → bot 应该先调 `off_shelf` 把旧的下了，再调 `publish_good`，绕开去重
+- bot 层 LLM 判断不准时，hfut 兜底返回 409，bot 收到 409 后**不要慌张**——直接群里 @ 用户：「你这条跟之前的'XXX'撞了，要重发请先回'下架旧的'」
+
 ---
 
 ## 临时账号 / 旗下账号 概念（hfut 后端配套设计，bot 间接依赖）
@@ -281,11 +302,13 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 - hfut 数据库改造：
   - `users` 加 `account_type` / `qq_number` / `parent_user_id` 字段
   - `articles` 加 `status=close`
-  - `goods` `price` 改为 nullable
+  - `goods` `price` 改为 nullable（面议）
   - `schools` 加 `qq_groups` 字段（或新建 `school_qq_groups` 表）
 - hfut 加 `/api/v1/bot/*` service 接口 + token 鉴权 middleware
+- hfut service 层加去重检查（`IsLikelyDuplicate`）；`POST /goods` 命中重复时返回 409 + 已存在 ID
 - bot 加 hfut 客户端封装 + 工具集实现（publish_good / off_shelf / list_my_active_goods / publish_question / publish_answer / reply_in_group）
-- 端到端跑通"识别 → 创建/复用旗下账号 → 上架"
+- bot publish_good 前必先调 list_my_active_goods 让 LLM 自查是否重复
+- 端到端跑通"识别 → 创建/复用旗下账号 → 去重检查 → 上架"
 
 ### P2（账号融合 + qq 绑定）
 

@@ -20,11 +20,15 @@ package logic
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"qq_bot/conf"
 	"qq_bot/global"
 	"qq_bot/model"
+	"qq_bot/utils/client_pool"
+	"qq_bot/utils/kimi"
 	zaplog "qq_bot/utils/zap"
+	"strings"
 	"sync"
 	"time"
 )
@@ -152,15 +156,13 @@ func (m *autoReplyManager) scanOnce() {
 
 // processSnapshot P0 阶段的"识别 + 回执"逻辑。
 //
-// 当前实现极简：只 log 整段，不调 Kimi、不真上架——P0 的核心是先把窗口聚合机制跑通，
-// 让我能在 log 里看到完整的"60s 内某用户在某群说了什么"段，验证窗口边界对不对、
-// 拼图（图 + 文）是不是按预期合并的。
+// 流程：
+//  1. 把 snap 转成 RecognizeInput（每条消息只保留 message_id / time / segments 文本表示）
+//  2. 调 Kimi 的 RecognizeBusinessActions，强制 JSON output，拿到 actions 数组
+//  3. 对每个 type != "none" 的 action 在群里 @ 用户回执"识别到 XXX，业务对接中"
+//  4. **P0 阶段不真调 hfut**——回执文本里带 [识别测试] 前缀，让群友也知道是测试
 //
-// 后面 P0 第二步会把 Kimi 识别接上来：调 ChatRecognize()，让模型返回结构化 JSON
-// 描述识别到的业务动作（publish_good / off_shelf 等），结果继续只 log + 群里 @ 用户回执，
-// 不真调 hfut。
-//
-// 之后 P1 把回执位置接到真正的 hfut 客户端。
+// P1 阶段会把 hfut 客户端接进来，回执文案改成正式版本，并真正调 publish_good / off_shelf。
 func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoReplyMsg) {
 	if len(snap) == 0 {
 		return
@@ -169,13 +171,152 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 	last := snap[len(snap)-1]
 	zaplog.Logger.Infof("autoReply flush group=%d user=%d card=%q msgs=%d duration=%s",
 		key.GroupID, key.UserID, first.UserCard, len(snap), last.Time.Sub(first.Time))
-	for i, m := range snap {
+	for i, msg := range snap {
 		zaplog.Logger.Infof("  [%d] msgid=%d %s | %s",
-			i+1, m.MessageID, m.Time.Format("15:04:05"), truncateForLog(m.FlatText, 200))
+			i+1, msg.MessageID, msg.Time.Format("15:04:05"), truncateForLog(msg.FlatText, 200))
 	}
-	// TODO(P0-step2): 调 kimi.ChatRecognize 拿结构化 JSON
-	// TODO(P0-step3): 群里 @ 用户回一句"识别到 XXX，业务接通中"
-	// TODO(P1): 真调 hfut bot API 上下架
+
+	if global.Kimi == nil {
+		zaplog.Logger.Debugf("autoReply group=%d user=%d Kimi 未启用，跳过识别", key.GroupID, key.UserID)
+		return
+	}
+
+	// 调 Kimi 识别。给一个相对宽的超时——单次 moonshot completions 通常几秒内回，60s 兜底。
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	input := buildRecognizeInput(key, first.UserCard, snap)
+	result, err := global.Kimi.RecognizeBusinessActions(ctx, input)
+	if err != nil {
+		zaplog.Logger.Errorf("autoReply 识别失败 group=%d user=%d: %v", key.GroupID, key.UserID, err)
+		return
+	}
+	if len(result.Actions) == 0 {
+		zaplog.Logger.Infof("autoReply group=%d user=%d 识别结果: 无业务动作", key.GroupID, key.UserID)
+		return
+	}
+
+	// 单独造一个 client 用来发回执，避免跟其它协程争用
+	httpClient := client_pool.NewClientPool()
+
+	for i, a := range result.Actions {
+		zaplog.Logger.Infof("autoReply group=%d user=%d action[%d] type=%s confidence=%.2f reason=%q",
+			key.GroupID, key.UserID, i, a.Type, a.Confidence, a.Reason)
+		if a.Type == "none" {
+			continue
+		}
+		ack := buildAckMessage(a)
+		if ack == "" {
+			continue
+		}
+		zaplog.Logger.Infof("autoReply ack → group=%d user=%d: %s", key.GroupID, key.UserID, truncateForLog(ack, 200))
+		_ = SendGroupAtText(httpClient, key.GroupID, key.UserID, ack)
+	}
+}
+
+// buildRecognizeInput 把窗口快照转成喂给 Kimi 的 RecognizeInput。
+//
+// 文本段：直接抄 td.Text；
+// 图片段：用 "[图片]" 占位符——具体 URL 暂不交给模型，避免 URL 干扰判断（模型只需要知道
+//
+//	"这条消息有图"以及它的 message_id）；
+// 其它段（at / face / reply 等）：用 "[type:X]" 占位符。
+func buildRecognizeInput(key autoReplyBucketKey, userCard string, snap []autoReplyMsg) kimi.RecognizeInput {
+	msgs := make([]kimi.RecognizeMsg, 0, len(snap))
+	for _, m := range snap {
+		segs := make([]string, 0, len(m.Segments))
+		for _, seg := range m.Segments {
+			switch seg.Type {
+			case "text":
+				if td, err := model.AsTextData(seg.Data); err == nil {
+					segs = append(segs, td.Text)
+				}
+			case "image":
+				segs = append(segs, "[图片]")
+			case "at":
+				segs = append(segs, "[at]")
+			case "face":
+				segs = append(segs, "[表情]")
+			case "reply":
+				segs = append(segs, "[引用回复]")
+			default:
+				segs = append(segs, "["+seg.Type+"]")
+			}
+		}
+		msgs = append(msgs, kimi.RecognizeMsg{
+			MessageID: m.MessageID,
+			Time:      m.Time.Format("15:04:05"),
+			Segments:  segs,
+		})
+	}
+	return kimi.RecognizeInput{
+		GroupID:  key.GroupID,
+		UserID:   key.UserID,
+		UserCard: userCard,
+		Messages: msgs,
+	}
+}
+
+// buildAckMessage 把识别到的 RecognizeAction 翻成一条群里 @ 用户的回执文本。
+//
+// P0 阶段所有回执都加 [识别测试] 前缀，明确标注"暂未真发布"——避免群友以为已经上架了去找。
+// P1 阶段把 [识别测试] 删掉、把"暂未真发布"改成实际的 hfut 商品 ID 链接。
+func buildAckMessage(a kimi.RecognizeAction) string {
+	const prefix = "[识别测试]"
+	switch a.Type {
+	case "publish_good":
+		category := "二手"
+		if a.Category == 2 {
+			category = "有偿求助"
+		}
+		var b strings.Builder
+		b.WriteString(prefix)
+		b.WriteString(" 检测到你想上架")
+		b.WriteString(category)
+		b.WriteString("「")
+		b.WriteString(orPlaceholder(a.Title, "(无标题)"))
+		b.WriteString("」")
+		if a.Negotiable || a.Price == nil {
+			b.WriteString(" 价格面议")
+		} else {
+			b.WriteString(fmt.Sprintf(" 价格 %g 元", *a.Price))
+		}
+		if a.Location != "" {
+			b.WriteString(" 地点 ")
+			b.WriteString(a.Location)
+		}
+		if len(a.ImageMessageIDs) > 0 {
+			b.WriteString(fmt.Sprintf(" 图×%d", len(a.ImageMessageIDs)))
+		}
+		b.WriteString("，业务对接中（暂未真发布）")
+		return b.String()
+
+	case "publish_question":
+		return fmt.Sprintf("%s 检测到你想发起提问「%s」，业务对接中（暂未真发布）",
+			prefix, orPlaceholder(a.QuestionTitle, "(未识别标题)"))
+
+	case "publish_answer":
+		hint := orPlaceholder(a.AnswerHintTo, "(未识别针对哪条提问)")
+		return fmt.Sprintf("%s 检测到你想回答「%s」，业务对接中（暂未真发布）", prefix, hint)
+
+	case "off_shelf":
+		hint := orPlaceholder(a.OffShelfHint, "(未指明，多个在售时会反问)")
+		return fmt.Sprintf("%s 检测到你想下架「%s」，业务对接中（暂未真下架）", prefix, hint)
+
+	case "close_question":
+		hint := orPlaceholder(a.CloseQuestionHint, "(未指明)")
+		return fmt.Sprintf("%s 检测到你想关闭提问「%s」，业务对接中（暂未真关闭）", prefix, hint)
+
+	default:
+		return ""
+	}
+}
+
+func orPlaceholder(s, fallback string) string {
+	if strings.TrimSpace(s) == "" {
+		return fallback
+	}
+	return s
 }
 
 // StartAutoReplyScanner 启动后台扫描协程。
