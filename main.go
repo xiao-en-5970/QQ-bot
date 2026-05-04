@@ -11,6 +11,7 @@ import (
 	"qq_bot/utils/client_pool"
 	"qq_bot/utils/cmd"
 	"qq_bot/utils/cmdline"
+	"qq_bot/utils/hfut"
 	"qq_bot/utils/kimi"
 	"qq_bot/utils/ticker"
 	"qq_bot/utils/wsclient"
@@ -58,6 +59,24 @@ func main() {
 	if global.Kimi, err = kimi.InitKimi(); err != nil {
 		zaplog.Logger.Errorf("Kimi 初始化失败: %v，CmdDefault 将回退到打印菜单", err)
 		global.Kimi = nil
+	}
+
+	// 初始化 hfut 客户端（auto_reply 路径会用）。
+	// URL 或 JWT secret 任一缺失都不初始化——auto_reply 检测到 global.Hfut == nil 时回退到
+	// "占位 ack"链路，方便先跑识别 demo 看效果再接 hfut。
+	//
+	// service-to-service 鉴权走"共享 secret + bot 自签 JWT"模式（详见 utils/hfut 包注释）：
+	// QQ-bot env 配 HFUT_API_JWT_SECRET，hfut env 配同样的 secret，0 维护数据库 token。
+	if conf.Cfg.Server.HfutAPIURL != "" && conf.Cfg.Server.HfutAPIJWTSecret != "" {
+		hc, herr := hfut.NewClient(conf.Cfg.Server.HfutAPIURL, conf.Cfg.Server.HfutAPIJWTSecret, "qq-bot")
+		if herr != nil {
+			zaplog.Logger.Errorf("hfut 客户端初始化失败: %v；auto_reply 将回退到占位 ack", herr)
+		} else {
+			global.Hfut = hc
+			zaplog.Logger.Infof("hfut 客户端已启用 (url=%s, 自签 JWT 模式)", conf.Cfg.Server.HfutAPIURL)
+		}
+	} else {
+		zaplog.Logger.Warnf("HFUT_API_URL / HFUT_API_JWT_SECRET 未完整配置，auto_reply 不会真上架（识别仍然能跑，回执用 [识别测试] 占位）")
 	}
 
 	if conf.Cfg.User.UserID == nil {

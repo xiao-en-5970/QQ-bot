@@ -9,6 +9,7 @@ import (
 	"qq_bot/conf"
 	"qq_bot/model"
 	"qq_bot/utils/dedup"
+	"qq_bot/utils/hfut"
 	"qq_bot/utils/kimi"
 )
 
@@ -103,6 +104,12 @@ var (
 
 	// Kimi 是 Moonshot AI 句柄；如果配置里没填 GPT_API_KEY 就是 nil，CmdDefault 会回退打印菜单
 	Kimi *kimi.Kimi
+
+	// Hfut 是 hfut 后端 /api/v1/bot/* 客户端；conf 里 HfutAPIURL+HfutAPIServiceToken 都填了
+	// 才会被 main.go 初始化，否则保持 nil。
+	// auto_reply::processSnapshot 调用前需判 nil——nil 时回退到"[识别测试] 占位 ack"路径，
+	// 不真上架，方便没接 hfut 时仍能跑识别 demo。
+	Hfut *hfut.Client
 
 	// ProcessedMsgIDs 记录已经处理过的群消息 message_id，防止重复回复。
 	// WS 模式下 NapCat 单连接不会重复推同一事件，但断线重连 / 跑两个 bot 实例时仍能兜底。

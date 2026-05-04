@@ -13,7 +13,7 @@ import (
 
 var Cfg Config
 
-// Server 对应 NapCat 的 OneBot11 HTTP / WebSocket 接口配置。
+// Server 对应 NapCat 的 OneBot11 HTTP / WebSocket 接口配置 + hfut 后端接口配置。
 //
 // Address       NapCat HTTP 服务的根地址（用来发送 send_group_msg 等动作），结尾必须带 /
 //               例如 https://bot-http.xiaoen.xyz/
@@ -23,11 +23,20 @@ var Cfg Config
 // AccessToken   HTTP server 鉴权 token（Authorization: Bearer ...）；空表示 NapCat 未启用鉴权
 // WSAccessToken WS server 鉴权 token；NapCat 把 HTTP / WS 当两套独立的网络适配器，token 各自配
 //               留空时回退到 AccessToken（适合两边配同一个 token 的简单场景）
+//
+// HfutAPIURL       hfut 后端 base URL（不带 /api/v1，工具集自己拼路径），例如 https://hfut-api.xiaoen.xyz
+// HfutAPIJWTSecret bot 跟 hfut 共享的 service-to-service JWT 签名 secret（HS256）。
+//                  bot 这边每次请求自签 60s 有效期的 JWT 放 X-Bot-Service-Token 头；
+//                  hfut 那边用同一个 secret 验签 + 检 exp + 检 iss，0 维护数据库 token。
+//                  跟 hfut 主 JWT secret（user 登录用）独立，方便单独 rotate。
+//                  空时 bot 不能跟 hfut 联动（识别仍然能跑，但只发"[识别测试] 占位 ack" 不真上架）
 type Server struct {
-	Address       string `mapstructure:"address"`
-	WSAddress     string `mapstructure:"ws_address,omitempty"`
-	AccessToken   string `mapstructure:"access_token,omitempty"`
-	WSAccessToken string `mapstructure:"ws_access_token,omitempty"`
+	Address          string `mapstructure:"address"`
+	WSAddress        string `mapstructure:"ws_address,omitempty"`
+	AccessToken      string `mapstructure:"access_token,omitempty"`
+	WSAccessToken    string `mapstructure:"ws_access_token,omitempty"`
+	HfutAPIURL       string `mapstructure:"hfut_api_url,omitempty"`
+	HfutAPIJWTSecret string `mapstructure:"hfut_api_jwt_secret,omitempty"`
 }
 
 type Pixiv struct {
@@ -255,6 +264,7 @@ func Init() (err error) {
 func bindEnvKeys() {
 	keys := []string{
 		"server.address", "server.ws_address", "server.access_token", "server.ws_access_token",
+		"server.hfut_api_url", "server.hfut_api_jwt_secret",
 		"log.std_out_log_level", "log.log_level", "log.log_file",
 		"pixiv.pixiv_address", "pixiv.size",
 		"group.auto_reply_whitelist",

@@ -205,8 +205,19 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 		if a.Type == "none" {
 			continue
 		}
-		ack := buildAckMessage(a)
+
+		// 选回执文案：
+		//   - hfut 已配置 → 真调 hfut（内部 upsert 旗下账号 + 落库），返回真实回执
+		//   - hfut 未配置 → P0 占位 ack（[识别测试] xxx 暂未真发布）
+		var ack string
+		if global.Hfut != nil {
+			ack = dispatchActionToHfut(ctx, key, first.UserCard, snap, a)
+		} else {
+			ack = buildAckMessage(a)
+		}
 		if ack == "" {
+			// "" 表示完全静默——典型场景是群没在 schools.qq_groups 注册过，
+			// 不该让群里看到任何 bot 的提示。
 			continue
 		}
 		zaplog.Logger.Infof("autoReply ack → group=%d user=%d: %s", key.GroupID, key.UserID, truncateForLog(ack, 200))

@@ -45,7 +45,7 @@
 | 动作 | 群里典型句式 | 同步到 hfut |
 |---|---|---|
 | **A. 上架二手** | "出三层鞋架 6元 [图片]"、"出按压U型枕 5元" | `goods` (category=1)，价格不填 → 面议 |
-| **B. 上架有偿求助** | "5.7 早十代课 30r"、"求人帮带饭" | `goods` (category=2) |
+| **B. 上架有偿求助 / AA 活动 / 拼团** | "5.7 早十代课 30r"、"求人帮带饭"、"出去玩 人均 20r"、"拼车去机场 AA 30" | `goods` (category=2)；这条覆盖范围比字面"有偿求助"宽，前端文案以后改成"求助/活动" |
 | **C. 上架提问** | "有人有形势与政策8的题库吗"（向整个群提问） | `articles` (type=2 question) |
 | **D. 提交回答** | 别人提问后某用户精准答了 | `articles` (type=3 answer)，挂到原 question 下 |
 | **E. 下架/已找** | "鞋架已出"、"已找到" / "已出"（不指明） | `POST /goods/:id/off-shelf` 或 `articles.status=close` |
@@ -197,7 +197,11 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 - 主账号**可以读写**旗下账号全部数据（改、删、回复消息等）
 - 主账号 app 内"个人主页"加入口：**进入你的 QQ 智能体** → 进旗下账号空间，**界面受限（只读为主）**
 - 不允许主账号操控 bot 主动发 QQ 消息（防 abuse；bot 自己只在群消息触发时回执）
-- "QQ 加急"功能：商品聊天界面长按聊天气泡 → 唤起 bot 发 QQ 私聊给对方用户
+- **"QQ 加急"功能**（P3 排期）：商品聊天界面**长按聊天气泡 → 弹出菜单 → 选"加急" → bot 把这条聊天发给对方 QQ 私聊**。
+  - 前端 UI：被加急的气泡渲染成**红色** + 标注"加急"标识（让发送人和接收人都看到）
+  - 后端：长按"加急"后调 hfut 接口（如 `POST /api/v1/orders/:id/messages/:msg_id/urge`），hfut 反查接收人 → 调 bot 内部 API → bot 发 QQ 私聊
+  - 限流：同一聊天 N 分钟内最多加急 1 次（防滥用）；接收人未绑 QQ 时拒绝
+  - 数据：`order_messages` 表加 `urgent BOOL DEFAULT false` + `urged_at TIMESTAMP NULL`（详见 P3 实施时再确定）
 
 ### 孤儿旗下账号的特殊行为
 
@@ -320,7 +324,12 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 ### P3（精度优化 + 边缘）
 
 - 多个在售时反问消歧
-- "QQ 加急"（商品聊天气泡长按 → bot 私聊对方）
+- "QQ 加急"功能完整实施：
+  - 前端：聊天气泡长按弹菜单 → "加急" → 红色气泡 + "加急"标识
+  - 后端：`order_messages` 加 `urgent` / `urged_at` 字段；hfut 加 `POST /orders/:id/messages/:msg_id/urge`；
+    bot 内部 HTTP API 加 `POST /internal/qq/send-private`（hfut 调 bot 发私聊），bot 反查接收人 QQ → NapCat send_private_msg
+  - 限流：同一对话每 5min 最多加急 1 次；接收人未绑 QQ → 直接拒绝
+  - 鉴权：bot 内部 API 用 `BOT_INTERNAL_API_TOKEN` env（hfut 一侧 known，跟 service token 不同）
 - 限流 / 错误锁定 / 审计日志
 - 重启窗口持久化（如果用了一段时间觉得"丢一半窗口"难受再做；目前接受丢）
 
