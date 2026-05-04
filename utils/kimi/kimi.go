@@ -141,7 +141,17 @@ func (k *Kimi) getOrCreate(userID int64) *QAS {
 	return qas
 }
 
-// Chat 同步调一次 moonshot，返回回复文本；自动维护对话历史。
+// Chat 同步调 moonshot 一轮或多轮（带 tool calling），返回最终的回复文本；自动维护对话历史。
+//
+// 协议（OpenAI 标准 function calling）：
+//  1. 我们带 messages + tools 发请求；
+//  2. Kimi 回 message。如果 finish_reason=tool_calls，里面有要调的工具及参数；
+//  3. 我们本地跑 Handler 拿 result；
+//  4. 把 assistant 的 tool_calls 消息 + 自己造的 role=tool 消息追加到 messages，
+//     再发一次请求；
+//  5. 直到 finish_reason=stop（或者超过 maxToolRounds 兜底退出）；
+//  6. 最终的 assistant content 存进 QAS 历史（中间的 tool_calls / tool 消息不存，
+//     用户视角看到的就是"我问→bot 答"，工具是 bot 内部细节）。
 //
 // 调用方应当保证 k != nil；nil 接收者会 panic（设计上让上层在调用前判 nil）。
 func (k *Kimi) Chat(ctx context.Context, userID int64, text string) (string, error) {
@@ -150,22 +160,65 @@ func (k *Kimi) Chat(ctx context.Context, userID int64, text string) (string, err
 	}
 	qas := k.getOrCreate(userID)
 	messages := qas.AsMessages(k.prompt, text)
+	tools := toolSpecs()
 
-	zaplog.Logger.Debugf("kimi Q user=%d: %s", userID, text)
-	resp, err := k.cli.Chat().Completions(ctx, &moonshot.ChatCompletionsRequest{
-		Model:       moonshot.ModelMoonshotV1128K,
-		Messages:    messages,
-		Temperature: 0.9,
-	})
-	if err != nil {
-		return "", fmt.Errorf("调用 moonshot completions 失败: %w", err)
+	// 单次 Chat 里允许的工具往返轮次上限：防 Kimi 反复调工具不出最终答案。
+	// 配置项是 conf.Cfg.Gpt.MaxToolRounds（env GPT_MAX_TOOL_ROUNDS），默认 5。
+	maxRounds := conf.Cfg.Gpt.MaxToolRounds
+	if maxRounds <= 0 {
+		maxRounds = 5 // applyDefaults 应该已经填了，这里再兜一道防御
 	}
-	msg, err := resp.GetMessage()
-	if err != nil {
-		return "", fmt.Errorf("从 moonshot 响应取 message 失败: %w", err)
-	}
-	zaplog.Logger.Debugf("kimi A user=%d: %s", userID, msg.Content)
 
-	qas.Add(text, msg.Content)
-	return msg.Content, nil
+	zaplog.Logger.Debugf("kimi Q user=%d: %s (tools=%d, max_rounds=%d)", userID, text, len(tools), maxRounds)
+
+	for round := 0; round < maxRounds; round++ {
+		resp, err := k.cli.Chat().Completions(ctx, &moonshot.ChatCompletionsRequest{
+			Model:       moonshot.ModelMoonshotV1128K,
+			Messages:    messages,
+			Temperature: 0.9,
+			Tools:       tools, // nil 也 ok，moonshot 接 omitempty
+		})
+		if err != nil {
+			return "", fmt.Errorf("调用 moonshot completions 失败: %w", err)
+		}
+		if len(resp.Choices) == 0 {
+			return "", errors.New("moonshot 返回 0 choices")
+		}
+		choice := resp.Choices[0]
+		msg := choice.Message
+
+		// 没有 tool_calls 或 finish_reason=stop -> 拿到最终回答，结束循环
+		if len(msg.ToolCalls) == 0 || choice.FinishReason == moonshot.FinishReasonStop {
+			zaplog.Logger.Debugf("kimi A user=%d round=%d: %s", userID, round, msg.Content)
+			qas.Add(text, msg.Content)
+			return msg.Content, nil
+		}
+
+		// 有 tool_calls -> 本地依次执行，把 assistant 消息 + 各 tool 结果消息追加进 messages
+		zaplog.Logger.Infof("kimi user=%d round=%d 触发 %d 个 tool_calls", userID, round, len(msg.ToolCalls))
+		messages = append(messages, msg)
+		for _, call := range msg.ToolCalls {
+			if call.Function == nil {
+				continue
+			}
+			result := invokeTool(ctx, call.Function.Name, call.Function.Arguments)
+			zaplog.Logger.Infof("kimi tool=%s args=%s -> %s",
+				call.Function.Name, truncateLog(call.Function.Arguments, 200), truncateLog(result, 200))
+			messages = append(messages, &moonshot.ChatCompletionsMessage{
+				Role:       moonshot.RoleTool,
+				Content:    result,
+				ToolCallID: call.ID,
+			})
+		}
+	}
+
+	return "", fmt.Errorf("kimi 连续 %d 轮 tool_calls 仍未给最终答案，已放弃（保护性退出）", maxRounds)
+}
+
+// truncateLog 给日志里的长字符串做单行截断，避免 base64/JSON 把日志冲花。
+func truncateLog(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }

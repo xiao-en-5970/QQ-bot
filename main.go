@@ -99,7 +99,7 @@ func main() {
 	// Wg.Add(1) 必须由父协程在 `go ...` 之前调用，否则父协程可能"抢跑"到 Wg.Wait()
 	// 时各 goroutine 还没来得及自己 Add，counter 仍是 0，Wait 立刻返回，
 	// main 直接退出，bot 一启动就死。这是之前 time.Sleep 兜底掩盖的同一个 bug。
-	const backgroundJobs = 4
+	const backgroundJobs = 5 // WaitExit, ParseCmd, ClearCacheTicker, wsclient.Run, AutoReplyScanner
 	for i := 0; i < backgroundJobs; i++ {
 		global.Wg.Add(1)
 	}
@@ -109,6 +109,9 @@ func main() {
 	// WebSocket 长连接，唯一的"消息入口"。断线指数退避自动重连，详见 wsclient.Run 注释。
 	// 老的轮询方案（GroupTicker / UpdateGroupListTicker）已弃用，原因见 utils/wsclient 包注释。
 	go wsclient.Run(ctx)
+	// 群聊白名单的"窗口聚合"扫描协程：每 5s 扫一次所有 (group,user) 桶，沉默到时的就 flush。
+	// 仅当 Group.AutoReplyWhitelist 非空时这个协程才会真有事干；空白名单时它每 5s 空转一次没影响。
+	go logic.StartAutoReplyScanner(ctx, client_pool.NewClientPool())
 
 	// pprof 是 daemon 性质的调试入口，不参与 Wg（挂了也不该影响 bot 退出语义）。
 	go func() {

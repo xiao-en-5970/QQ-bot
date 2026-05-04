@@ -49,10 +49,38 @@ type Log struct {
 //	WS 模式下"监听哪些群"完全由 NapCat 那边的 push 决定，这个字段保留只是为了
 //	启动时打印一下方便排查，不参与消息接收。
 //
+// AutoReplyWhitelist 启用了"非 @bot 也回复"模式的群号白名单。
+//
+//	默认空 = 没有任何群启用——全部群都只在被 @ 时才响应（默认安全行为）。
+//	非空时，列表里的群会让 bot 抓取所有非自己的聊天记录，按 skill/bot/SKILL.md 里描述的
+//	策略走"窗口聚合 + LLM 识别"流程。
+//
+// AutoReplyWindowSeconds 自动监听窗口的"沉默触发"秒数。
+//
+//	per-(group, user) 滑动窗口内，最后一条消息距今超过这个秒数就把整段交给 LLM 判定。
+//	默认 60 秒。详见 skill/bot/SKILL.md 的"窗口聚合"章节。
+//
+// AutoReplyMaxWindowSize 单个窗口里允许攒多少条消息，超过就强制 flush（防止异常情况下一直攒不结算）。
+//
+//	默认 20 条。
+//
 // 历史的 get_group_history_interval / update_group_list_interval / retry 字段已弃用
 // （WS 模式不再轮询历史消息），yaml 里如果还有这些字段会被 viper 静默忽略。
 type Group struct {
-	GroupID []int64 `mapstructure:"group_id,omitempty"`
+	GroupID                []int64 `mapstructure:"group_id,omitempty"`
+	AutoReplyWhitelist     []int64 `mapstructure:"auto_reply_whitelist,omitempty"`
+	AutoReplyWindowSeconds int     `mapstructure:"auto_reply_window_seconds,omitempty"`
+	AutoReplyMaxWindowSize int     `mapstructure:"auto_reply_max_window_size,omitempty"`
+}
+
+// IsAutoReplyGroup 判断某群是否启用了"非 @bot 也回复"白名单模式。
+func (g Group) IsAutoReplyGroup(groupID int64) bool {
+	for _, id := range g.AutoReplyWhitelist {
+		if id == groupID {
+			return true
+		}
+	}
+	return false
 }
 
 // Commands 子命令开关 + 默认命令兜底。
@@ -158,10 +186,13 @@ type Tools struct {
 //	APIKey         Moonshot API key；为空则不启用聊天，CmdDefault 回退到打印菜单
 //	               env: GPT_API_KEY；兼容老变量 MOONSHOT_KEY
 //	MaxContextSize 每个用户保留的历史 Q/A 对数量（环形缓冲区大小），默认 40
+//	MaxToolRounds  单次 Chat() 里允许的"工具往返"轮次上限（防止 Kimi 反复调工具不出最终答案）。
+//	               <=0 时取代码内置默认 5。env: GPT_MAX_TOOL_ROUNDS
 //	SystemPrompt   人设/系统提示词，留空使用一个简洁的默认值
 type Gpt struct {
 	APIKey         string `mapstructure:"api_key"`
 	MaxContextSize int64  `mapstructure:"max_context_size"`
+	MaxToolRounds  int    `mapstructure:"max_tool_rounds"`
 	SystemPrompt   string `mapstructure:"system_prompt"`
 }
 
@@ -226,10 +257,13 @@ func bindEnvKeys() {
 		"server.address", "server.ws_address", "server.access_token", "server.ws_access_token",
 		"log.std_out_log_level", "log.log_level", "log.log_file",
 		"pixiv.pixiv_address", "pixiv.size",
+		"group.auto_reply_whitelist",
+		"group.auto_reply_window_seconds",
+		"group.auto_reply_max_window_size",
 		"user.user_id",
 		"cache.tmp_dir", "cache.pdf_tmp_dir", "cache.max_size", "cache.clear_interval",
 		"tools.jmcomic_bin", "tools.img2pdf_bin", "tools.python_bin",
-		"gpt.api_key", "gpt.max_context_size", "gpt.system_prompt",
+		"gpt.api_key", "gpt.max_context_size", "gpt.max_tool_rounds", "gpt.system_prompt",
 		"commands.enabled", "commands.default",
 	}
 	for _, k := range keys {
@@ -273,9 +307,21 @@ func applyDefaults(c *Config) {
 		c.Log.LogFile = filepath.Join(cacheRoot, "logs", "qq-bot.log")
 	}
 
-	// gpt 默认值：环上下文 40 条；prompt 留空让 Init 时给一个简洁的默认人设
+	// gpt 默认值：环上下文 40 条；prompt 留空让 Init 时给一个简洁的默认人设；
+	// tool 循环上限 5 轮（实测正常一两轮就出答案，5 轮够兜底防 yo-yo）
 	if c.Gpt.MaxContextSize <= 0 {
 		c.Gpt.MaxContextSize = 40
+	}
+	if c.Gpt.MaxToolRounds <= 0 {
+		c.Gpt.MaxToolRounds = 5
+	}
+
+	// 自动监听窗口默认值：60 秒沉默触发、单窗口最多 20 条
+	if c.Group.AutoReplyWindowSeconds <= 0 {
+		c.Group.AutoReplyWindowSeconds = 60
+	}
+	if c.Group.AutoReplyMaxWindowSize <= 0 {
+		c.Group.AutoReplyMaxWindowSize = 20
 	}
 }
 
