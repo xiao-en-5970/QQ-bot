@@ -67,13 +67,13 @@ func main() {
 	//
 	// service-to-service 鉴权走"共享 secret + bot 自签 JWT"模式（详见 utils/hfut 包注释）：
 	// QQ-bot env 配 HFUT_API_JWT_SECRET，hfut env 配同样的 secret，0 维护数据库 token。
-	if conf.Cfg.Server.HfutAPIURL != "" && conf.Cfg.Server.HfutAPIJWTSecret != "" {
-		hc, herr := hfut.NewClient(conf.Cfg.Server.HfutAPIURL, conf.Cfg.Server.HfutAPIJWTSecret, "qq-bot")
+	if conf.Cfg.Hfut.APIURL != "" && conf.Cfg.Hfut.APIJWTSecret != "" {
+		hc, herr := hfut.NewClient(conf.Cfg.Hfut.APIURL, conf.Cfg.Hfut.APIJWTSecret, "qq-bot")
 		if herr != nil {
 			zaplog.Logger.Errorf("hfut 客户端初始化失败: %v；auto_reply 将回退到占位 ack", herr)
 		} else {
 			global.Hfut = hc
-			zaplog.Logger.Infof("hfut 客户端已启用 (url=%s, 自签 JWT 模式)", conf.Cfg.Server.HfutAPIURL)
+			zaplog.Logger.Infof("hfut 客户端已启用 (url=%s, 自签 JWT 模式)", conf.Cfg.Hfut.APIURL)
 		}
 	} else {
 		zaplog.Logger.Warnf("HFUT_API_URL / HFUT_API_JWT_SECRET 未完整配置，auto_reply 不会真上架（识别仍然能跑，回执用 [识别测试] 占位）")
