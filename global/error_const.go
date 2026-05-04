@@ -5,12 +5,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/panjf2000/ants/v2"
 	"qq_bot/conf"
 	"qq_bot/model"
 	"qq_bot/utils/dedup"
 	"qq_bot/utils/hfut"
 	"qq_bot/utils/kimi"
+
+	"github.com/panjf2000/ants/v2"
 )
 
 // ErrUserNotified 表示「子命令已自行 SendGroupAtText/SendGroupText 把错误发给 QQ 群了」。

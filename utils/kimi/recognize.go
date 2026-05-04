@@ -56,12 +56,12 @@ type RecognizeAction struct {
 	Reason     string  `json:"reason"`     // 一句话解释为什么这么判（人类可读）
 
 	// 上架商品 / 有偿求助
-	Title       string   `json:"title,omitempty"`        // 商品标题（短）
-	Description string   `json:"description,omitempty"`  // 详细描述（可长）
-	Price       *float64 `json:"price,omitempty"`        // 价格；nil 视为未提供（配合 Negotiable）
-	Negotiable  bool     `json:"negotiable,omitempty"`   // true = 用户没明确价格 / 写"面议"
-	Category    int      `json:"category,omitempty"`     // 1=二手 2=有偿求助
-	Location    string   `json:"location,omitempty"`     // 地点（"新区" / "下铺" / 见面地等）；没明确就空
+	Title       string   `json:"title,omitempty"`       // 商品标题（短）
+	Description string   `json:"description,omitempty"` // 详细描述（可长）
+	Price       *float64 `json:"price,omitempty"`       // 价格；nil 视为未提供（配合 Negotiable）
+	Negotiable  bool     `json:"negotiable,omitempty"`  // true = 用户没明确价格 / 写"面议"
+	Category    int      `json:"category,omitempty"`    // 1=二手 2=有偿求助
+	Location    string   `json:"location,omitempty"`    // 地点（"新区" / "下铺" / 见面地等）；没明确就空
 
 	// 上架提问
 	QuestionTitle   string `json:"question_title,omitempty"`
