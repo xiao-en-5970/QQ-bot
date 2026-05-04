@@ -16,13 +16,18 @@ var Cfg Config
 // Server 对应 NapCat 的 OneBot11 HTTP / WebSocket 接口配置。
 //
 // Address       NapCat HTTP 服务的根地址（用来发送 send_group_msg 等动作），结尾必须带 /
-//               例如 https://bot-http.xiaoen.xyz/
+//
+//	例如 https://bot-http.xiaoen.xyz/
+//
 // WSAddress     NapCat WebSocket Server 地址（事件推送），形如 wss://bot-ws.xiaoen.xyz/
-//               消息接收走 WS 而不是轮询 get_group_msg_history（NapCat 那个接口在某些群里
-//               返回会卡住"最新 20 条"不更新；详见 utils/wsclient 包注释里的踩坑记录）。
+//
+//	消息接收走 WS 而不是轮询 get_group_msg_history（NapCat 那个接口在某些群里
+//	返回会卡住"最新 20 条"不更新；详见 utils/wsclient 包注释里的踩坑记录）。
+//
 // AccessToken   HTTP server 鉴权 token（Authorization: Bearer ...）；空表示 NapCat 未启用鉴权
 // WSAccessToken WS server 鉴权 token；NapCat 把 HTTP / WS 当两套独立的网络适配器，token 各自配
-//               留空时回退到 AccessToken（适合两边配同一个 token 的简单场景）
+//
+//	留空时回退到 AccessToken（适合两边配同一个 token 的简单场景）
 type Server struct {
 	Address       string `mapstructure:"address"`
 	WSAddress     string `mapstructure:"ws_address,omitempty"`
@@ -36,10 +41,11 @@ type Server struct {
 //
 // APIURL       hfut 后端 base URL（不带 /api/v1，工具集自己拼路径），例如 https://api.xiaoen.xyz
 // APIJWTSecret bot 跟 hfut 共享的 service-to-service JWT 签名 secret（HS256）。
-//              bot 这边每次请求自签 60s 有效期的 JWT 放 X-Bot-Service-Token 头；
-//              hfut 那边用同一个 secret 验签 + 检 exp + 检 iss，0 维护数据库 token。
-//              跟 hfut 主 JWT secret（user 登录用）独立，方便单独 rotate。
-//              空时 bot 不能跟 hfut 联动（识别仍然能跑，但只发"[识别测试] 占位 ack" 不真上架）
+//
+//	bot 这边每次请求自签 60s 有效期的 JWT 放 X-Bot-Service-Token 头；
+//	hfut 那边用同一个 secret 验签 + 检 exp + 检 iss，0 维护数据库 token。
+//	跟 hfut 主 JWT secret（user 登录用）独立，方便单独 rotate。
+//	空时 bot 不能跟 hfut 联动（识别仍然能跑，但只发"[识别测试] 占位 ack" 不真上架）
 //
 // env 名（直白前缀，跟 hfut 那边的 BOT_SERVICE_JWT_SECRET 一组使用）：
 //
