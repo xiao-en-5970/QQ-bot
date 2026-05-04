@@ -37,6 +37,16 @@ func main() {
 	zaplog.Init()
 	zaplog.Logger.Infof("配置读取成功, NapCat HTTP=%s", conf.Cfg.Server.Address)
 
+	// 严格 opt-in：commands.enabled 为空时所有 @bot 都会被静默忽略。
+	// 启动期就 WARN 一下，避免管理员"为啥 bot 不响应"困惑半天。
+	if !conf.Cfg.Commands.AnyEnabled() {
+		zaplog.Logger.Warnf("commands.enabled 未配置或为空 → bot 启动后将不响应任何 @ 指令" +
+			"。如果要启用，例如 env 设 COMMANDS_ENABLED=jm,pix,help,github,chat")
+	} else {
+		zaplog.Logger.Infof("已启用的命令: %v, default=%q",
+			conf.Cfg.Commands.Enabled, conf.Cfg.Commands.Default)
+	}
+
 	client := client_pool.NewClientPool()
 
 	if err = logic.CheckNapCatAlive(client); err != nil {

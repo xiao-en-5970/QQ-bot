@@ -62,10 +62,28 @@ tools:
   python_bin: ""
 
 # Kimi (Moonshot) 聊天配置
-# - api_key 留空则不启用，CmdDefault 走原来的"打印菜单"行为
+# - api_key 留空则不启用，`@bot chat` 时会回"聊天功能未启用"
 # - 生产推荐用环境变量 GPT_API_KEY（也兼容 MOONSHOT_KEY），不要把 key 写进 yaml
 gpt:
   api_key: ""
   max_context_size: 40
   # system_prompt 留空使用代码内置的简洁牧濑红莉栖人设；想自定义的话直接覆盖
   system_prompt: ""
+
+# 子命令开关 + 默认命令兜底
+# - enabled 留空 = 全部启用；非空 = 白名单，不在表里的命令静默忽略（bot 完全不回）
+#   合法命令名: jm / pix / help / github / chat
+# - default 用户输入未匹配关键字时（`@bot 你好`）按这条命令兜底
+#   例如 default=chat 等价于"任意非命令文本进 Kimi 聊天"
+#   留空时显示菜单
+# - 推荐用环境变量 COMMANDS_ENABLED / COMMANDS_DEFAULT 覆盖
+#   COMMANDS_ENABLED=jm,pix,help,github,chat
+#   COMMANDS_DEFAULT=chat
+commands:
+  enabled:
+    # - jm
+    # - pix
+    # - help
+    # - github
+    # - chat
+  default: ""

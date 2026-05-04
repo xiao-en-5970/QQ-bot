@@ -55,6 +55,76 @@ type Group struct {
 	GroupID []int64 `mapstructure:"group_id,omitempty"`
 }
 
+// Commands 子命令开关 + 默认命令兜底。
+//
+// === Enabled（白名单，严格 opt-in）===
+//
+// 不配置 = 全部禁用，bot 不会响应任何 @；要让 bot 工作必须**显式列出**想启用的命令。
+// 这种"未配置即关闭"语义是为了避免新部署 / 升级时管理员忘了配，bot 默默暴露所有功能
+// 导致的风险（带宽 / 风控 / 上游服务挂掉 / 滥用）。
+//
+// 被禁用的命令直接静默 return，不向群里发任何消息，也不在菜单里展示——
+// 管理员关命令的常见动机是带宽爆了 / 上游挂了 / 临时维护，这种场景下"群里多一条
+// 'xxx 已禁用' 的回复"反而会刷屏，干脆完全闭嘴。
+//
+// 已识别的命令名：jm / pix / help / github / chat
+//   - 前 4 个对应 ExecCmd switch 里同名 case
+//   - chat 是与 Kimi 聊天的入口（显式 `@bot chat 你好`）
+//
+// === Default（无前缀兜底）===
+//
+// 当用户输入 `@bot xxx` 但 xxx 不是已识别的命令关键字时，按 Default 指定的命令兜底。
+// 例如 Default="chat" 时 `@bot 你好` 会被当作 `@bot chat 你好` 处理；
+// Default="" 时显示菜单（菜单里只列被启用的命令）。
+//
+// Default 应该是 Enabled 列表里的一项；如果指向被禁用的命令则会被白名单挡掉，静默忽略。
+//
+// === 配置示例 ===
+//
+// 完整启用所有命令并把 chat 设为默认（最接近老 LLOneBot 行为）：
+//
+//	commands:
+//	  enabled: [jm, pix, help, github, chat]
+//	  default: chat
+//
+// env：
+//
+//	COMMANDS_ENABLED=jm,pix,help,github,chat
+//	COMMANDS_DEFAULT=chat
+//
+// === viper 自动 split ===
+//
+// viper 1.20+ 的默认 mapstructure 会 StringToSliceHookFunc(",")，所以 env 写
+// `COMMANDS_ENABLED=jm,pix` 会被解析成 []string{"jm","pix"}，无需额外 hook。
+type Commands struct {
+	Enabled []string `mapstructure:"enabled,omitempty"`
+	Default string   `mapstructure:"default,omitempty"`
+}
+
+// IsEnabled 判断某个子命令是否启用。严格 opt-in：
+//
+//	列表为空 -> 一律 false（bot 不响应任何命令，需要管理员显式配置开启）
+//	列表非空 -> 只有出现在列表里的命令返回 true
+func (c Commands) IsEnabled(name string) bool {
+	for _, s := range c.Enabled {
+		if strings.TrimSpace(s) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// AnyEnabled 是否至少启用了一个命令。用于启动期 sanity check 和 Menu() 判断"是否
+// 有任何东西可展示"——全禁用时菜单返回空，让 bot 表现得彻底安静。
+func (c Commands) AnyEnabled() bool {
+	for _, s := range c.Enabled {
+		if strings.TrimSpace(s) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 type User struct {
 	UserID *int64 `mapstructure:"user_id,omitempty"`
 }
@@ -96,14 +166,15 @@ type Gpt struct {
 }
 
 type Config struct {
-	Log    Log    `mapstructure:"log"`
-	Server Server `mapstructure:"server"`
-	Pixiv  Pixiv  `mapstructure:"pixiv"`
-	Group  Group  `mapstructure:"group"`
-	User   User   `mapstructure:"user"`
-	Cache  Cache  `mapstructure:"cache"`
-	Tools  Tools  `mapstructure:"tools"`
-	Gpt    Gpt    `mapstructure:"gpt"`
+	Log      Log      `mapstructure:"log"`
+	Server   Server   `mapstructure:"server"`
+	Pixiv    Pixiv    `mapstructure:"pixiv"`
+	Group    Group    `mapstructure:"group"`
+	User     User     `mapstructure:"user"`
+	Cache    Cache    `mapstructure:"cache"`
+	Tools    Tools    `mapstructure:"tools"`
+	Gpt      Gpt      `mapstructure:"gpt"`
+	Commands Commands `mapstructure:"commands"`
 }
 
 // Init 加载配置：YAML（test.yaml） + 环境变量，env 优先级最高。
@@ -159,6 +230,7 @@ func bindEnvKeys() {
 		"cache.tmp_dir", "cache.pdf_tmp_dir", "cache.max_size", "cache.clear_interval",
 		"tools.jmcomic_bin", "tools.img2pdf_bin", "tools.python_bin",
 		"gpt.api_key", "gpt.max_context_size", "gpt.system_prompt",
+		"commands.enabled", "commands.default",
 	}
 	for _, k := range keys {
 		_ = viper.BindEnv(k)

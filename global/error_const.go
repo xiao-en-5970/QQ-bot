@@ -2,9 +2,11 @@ package global
 
 import (
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/panjf2000/ants/v2"
+	"qq_bot/conf"
 	"qq_bot/model"
 	"qq_bot/utils/dedup"
 	"qq_bot/utils/kimi"
@@ -21,7 +23,6 @@ const (
 	//基础错误
 	ErrCmdNotFound     = "无法识别该指令格式"
 	ErrCmdArgFault     = "指令参数错误"
-	ErrCmdMenu         = "当前指令有:\njm（jm本子）;\nhelp（帮助）;\npix（pixiv图片）;\ngithub（项目开源）\n" + ErrCmdHelpHelp
 	ErrCmdUnknownFault = "指令未知错误"
 
 	//jm错误
@@ -43,9 +44,56 @@ const (
 	ErrCmdPixTagNotFound = "未找到相关pixiv图片,tag:"
 	ErrCmdPix404         = "图片无法访问，请重试,tag"
 
+	//chat（Kimi 聊天）
+	ErrCmdChatHelp        = "格式：@bot chat 想说的话\n例：@bot chat 你最近怎么样"
+	ErrCmdChatDisabled    = "聊天功能未启用（GPT_API_KEY 未配置）"
+	ErrCmdChatEmpty       = "请在 `@bot chat ` 后面带上想说的话"
+	ErrCmdChatKimiFault   = "我刚才走神了... 你再说一遍 (；´д｀)"
+	InfoCmdChatChatPrefix = "\n"
+
 	//help错误
-	ErrCmdHelpHelp = "格式：@bot help 功能[jm,pix等,可留空]\n例：@bot help jm"
+	ErrCmdHelpHelp = "格式：@bot help 功能[jm,pix,chat 等,可留空]\n例：@bot help jm"
 )
+
+// Menu 动态生成菜单文本，根据 conf.Cfg.Commands.Enabled 决定列哪几条子命令。
+//
+// 返回 "" 时表示当前没有任何启用的命令——调用方应该跳过发送（让 bot 完全安静），
+// 而不是发一段空菜单刷屏。
+//
+// 调用者：ExecCmd（未识别关键字 + 没配 default 时的兜底）、CmdHelp（@bot help）、
+// 单独 @bot 时的菜单回执。各调用点都做了"空字符串就 skip"的处理。
+func Menu() string {
+	var items []string
+	if conf.Cfg.Commands.IsEnabled("jm") {
+		items = append(items, "jm（jm本子）")
+	}
+	if conf.Cfg.Commands.IsEnabled("help") {
+		items = append(items, "help（帮助）")
+	}
+	if conf.Cfg.Commands.IsEnabled("pix") {
+		items = append(items, "pix（pixiv图片）")
+	}
+	if conf.Cfg.Commands.IsEnabled("chat") {
+		items = append(items, "chat（与 bot 聊天）")
+	}
+	if conf.Cfg.Commands.IsEnabled("github") {
+		items = append(items, "github（项目开源）")
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("当前指令有:\n")
+	for _, s := range items {
+		b.WriteString(s)
+		b.WriteString(";\n")
+	}
+	// help 命令没启用就别再贴 help 的格式说明了，让用户更糊涂。
+	if conf.Cfg.Commands.IsEnabled("help") {
+		b.WriteString(ErrCmdHelpHelp)
+	}
+	return b.String()
+}
 
 var (
 	ChanToParseCmd = make(chan model.ChanToParseCmd, 15)

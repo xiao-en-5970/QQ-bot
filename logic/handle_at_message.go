@@ -37,6 +37,15 @@ func HandleAtMessage(client *http.Client, msg *model.Message) {
 		return
 	}
 
+	// 全禁用 short-circuit：管理员没在 commands.enabled 里启用任何命令时，
+	// 整条 @bot 处理流程提前 return。这样无论用户发什么（@bot xxx、@bot 后跟图、单 @bot）
+	// bot 都完全不响应，跟"严格 opt-in"语义一致；不会通过菜单 / 参数错误提示泄露 bot 在线。
+	if !conf.Cfg.Commands.AnyEnabled() {
+		zaplog.Logger.Debugf("group=%d msgid=%d commands.enabled 为空，bot 不响应任何命令",
+			msg.GroupID, msg.MessageID)
+		return
+	}
+
 	if conf.Cfg.User.UserID == nil {
 		zaplog.Logger.Errorf("HandleAtMessage 收到事件但 bot user_id 未初始化，丢弃 msgid=%d", msg.MessageID)
 		return
@@ -75,7 +84,10 @@ func HandleAtMessage(client *http.Client, msg *model.Message) {
 
 	if len(msg.Message) == 1 {
 		zaplog.Logger.Debugf("group=%d msgid=%d 单独 @bot, return menu", msg.GroupID, msg.MessageID)
-		_ = SendGroupAtText(client, msg.GroupID, msg.UserID, global.ErrCmdMenu)
+		// 全禁用时 Menu() 返回 ""，这里不发任何东西——保持"未配置即静默"语义。
+		if menu := global.Menu(); menu != "" {
+			_ = SendGroupAtText(client, msg.GroupID, msg.UserID, menu)
+		}
 		return
 	}
 
