@@ -246,6 +246,39 @@ type Gpt struct {
 	SystemPrompt   string `mapstructure:"system_prompt"`
 }
 
+// Internal bot 暴露给 hfut 调用的"反向 HTTP API" 配置。
+//
+// 用途：
+//   - hfut 在 QQ 绑定流程里需要让 bot 帮忙：判断 QQ 是不是 bot 好友、给 QQ 发私聊验证码等
+//   - hfut 反向调 bot 的 internal HTTP server，鉴权 = JWT 验签
+//
+// 鉴权设计（跟 bot → hfut 方向对称）：
+//   - 两个调用方向**共享同一个 HS256 secret**——bot 端从 conf.Hfut.APIJWTSecret 读
+//     （env HFUT_API_JWT_SECRET），hfut 端从 config.BotServiceJWTSecret 读
+//     （env BOT_SERVICE_JWT_SECRET）；两个 env 名不同但值相同
+//   - 调用方每次自签 60s 有效期 JWT 放 X-Service-Token 头
+//   - 接收方靠 iss 区分调用方向：
+//       bot → hfut：iss = "HFUT-Graduation-Project-bot"
+//       hfut → bot：iss = "HFUT-Graduation-Project-hfut"
+//     这样即便 secret 共享，两个方向的 token 也不能互换使用
+//   - HFUT_API_JWT_SECRET 为空 → server 整体不启动（安全降级）
+//
+// 安全考虑：
+//   - 这个 server 不该对公网开放——只让 hfut（同一 docker network）能访问
+//   - docker compose 部署时 bot 容器的这个端口**不要 ports 映射到宿主机**，
+//     只让 hfut 容器通过 internal network 访问；name resolution: http://qq-bot-server:8090
+//
+// 字段：
+//
+//	Port   监听端口；默认 8090
+//
+// env：
+//
+//	BOT_INTERNAL_API_PORT
+type Internal struct {
+	Port int `mapstructure:"port,omitempty"`
+}
+
 type Config struct {
 	Log      Log      `mapstructure:"log"`
 	Server   Server   `mapstructure:"server"`
@@ -257,6 +290,7 @@ type Config struct {
 	Tools    Tools    `mapstructure:"tools"`
 	Gpt      Gpt      `mapstructure:"gpt"`
 	Commands Commands `mapstructure:"commands"`
+	Internal Internal `mapstructure:"internal"`
 }
 
 // Init 加载配置：YAML（test.yaml） + 环境变量，env 优先级最高。
@@ -318,6 +352,7 @@ func bindEnvKeys() {
 		"tools.jmcomic_bin", "tools.img2pdf_bin", "tools.python_bin",
 		"gpt.api_key", "gpt.max_context_size", "gpt.max_tool_rounds", "gpt.system_prompt",
 		"commands.enabled", "commands.default",
+		"internal.port",
 	}
 	for _, k := range keys {
 		_ = viper.BindEnv(k)

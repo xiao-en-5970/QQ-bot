@@ -87,3 +87,13 @@ commands:
     # - github
     # - chat
   default: ""
+
+# 反向 HTTP API（hfut 调本服务用，QQ 绑定流程必须；详见 skill/bot/SKILL.md）
+# 仅 internal network 监听——docker compose 部署时 bot 容器**不要**把这个端口 ports 映射到宿主机
+# 鉴权：复用 hfut.api_jwt_secret 自签 60s JWT 放 X-Service-Token 头；空 = 不启动 server
+# 推荐 env 配置：
+#   BOT_INTERNAL_API_PORT=8090
+#   HFUT_API_JWT_SECRET=<跟 hfut 一样的共享 secret，已经在 hfut 段配过了，不需要额外配>
+internal:
+  port: 8090
+

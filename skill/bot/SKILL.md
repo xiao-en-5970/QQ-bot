@@ -290,10 +290,53 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
         前端显示"绑定成功"，跳转个人主页
 ```
 
+### 实现状态（P2a 已完成）
+
+#### bot 端：反向 HTTP API server（`internal/api/server.go`）
+
+- 端口：`BOT_INTERNAL_API_PORT`（默认 8090）；docker 部署**不要 ports 映射到宿主机**，仅 internal network 暴露
+- 鉴权：服务间 JWT，跟 bot → hfut 方向**对称**——
+  - 共享 HS256 secret = `HFUT_API_JWT_SECRET`（bot 端 env） / `BOT_SERVICE_JWT_SECRET`（hfut 端 env），同一个值；
+  - hfut 每次自签 60s 有效期 JWT，放 `X-Service-Token` 头；
+  - iss = `HFUT-Graduation-Project-hfut`（跟反向 `HFUT-Graduation-Project-bot` 不同——防止两个方向的 token 互换使用）；
+  - secret 空时 server 不启动（安全降级）。
+- 路由：
+  - `POST /internal/qq/check-friend` body `{qq_number, no_cache?}` → `{is_friend: bool}`
+  - `POST /internal/qq/send-private` body `{qq_number, text}` → `{message_id}`
+  - `POST /internal/qq/send-group`   body `{group_id, qq_number?, text}` → `{status: "ok"}`（qq_number=0 时发纯文本群消息，否则 @ 该用户）
+  - `GET  /internal/healthz`（不需要 token，给 docker compose healthcheck 用）
+
+#### hfut 端：3 个 RESTful 端点（`controller/qq_bind.go`，走 user JWT）
+
+- `POST /api/v1/user/qq-bind/request-code` body `{qq_number}` → `{ttl_seconds: 300}`
+- `POST /api/v1/user/qq-bind/confirm`      body `{qq_number, code}` → 200/400
+- `POST /api/v1/user/qq-unbind`            无 body → 200/400
+
+校验顺序（每个写入端点都走）：
+1. 主账号是 `account_type=normal` 且 `school_id != 0`（先绑学校再绑 QQ）
+2. 当前主账号下没有挂着的旗下账号（严格 1:1）
+3. 验证码逻辑：
+
+请求验证码时调用 bot.CheckFriend；不是好友 → 404；是 → redis 存 `qq_bind_code:{qq}=={code, requesting_user_id, created_at}` TTL 5min，再调 bot.SendPrivate 发到 QQ。
+
+确认时校验 redis：code + requesting_user_id 匹配；命中 → tx 内挂载（找现有孤儿旗下账号 → 设 parent_user_id + 用主账号 school_id 覆盖；找不到 → 创建空旗下账号直接挂上）。tx commit 后删 redis code。
+
+解绑：把当前主账号下的旗下账号 `parent_user_id` 设回 NULL，**不删任何数据**——旗下账号的商品 / 提问继续存在但变孤儿。
+
 ### 限流
 
-- 同一 QQ 5min 内最多请求 1 次验证码（前端按钮置灰 + 后端 redis lock）
-- 错 5 次 → 锁 30min（可选，看实际滥用情况再加）
+- 同一 user 5min 内最多请求 1 次验证码（redis SetNX `qq_bind_throttle:{user_id}` TTL 5min）
+- 错 5 次 → 锁 30min（**P2a 暂未做**，等观察实际滥用情况再 P3 加）
+
+### 错误回执（前端按需提示）
+
+| 状态码 | sentinel | 用户感知 |
+|---|---|---|
+| 400 | `ErrQQNumberInvalid` / `ErrUserNotBoundSchool` / `ErrUserAlreadyBoundQQ` | 提示具体原因（"请先绑学校"/"已绑过 QQ"等） |
+| 400 | `ErrCodeInvalid` / `ErrCodeExpired` | "验证码错误 / 已过期，请重试" |
+| 404 | `ErrBotNotFriend` | "请先把 bot 加为好友再尝试绑定" |
+| 429 | `ErrThrottled` | "请求过于频繁，请 5 分钟后再试" |
+| 502 | `ErrBotUnavailable` | "系统繁忙，稍后再试" |
 
 ---
 
@@ -312,8 +355,7 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 | `GPT_MAX_CONTEXT_SIZE` | 单用户保留最近 N 轮对话 | 40 |
 | `HFUT_API_URL` | hfut 后端 base URL | — |
 | `HFUT_API_JWT_SECRET` | bot 跟 hfut 共享的 service-to-service JWT secret（HS256） | — |
-| `BOT_INTERNAL_API_PORT` | bot 内部 HTTP server 端口（hfut 调 bot 用，P2 启用） | — |
-| `BOT_INTERNAL_API_TOKEN` | bot 内部 API 鉴权 token | — |
+| `BOT_INTERNAL_API_PORT` | bot 内部 HTTP server 端口（仅 internal network 监听） | 8090 |
 
 ### 无感模式（auto_reply_verbosity）
 
@@ -369,12 +411,27 @@ group:
 - ✅ 图片转存（NapCat 临时 URL → hfut OSS 永久 URL，单张失败不影响整体）
 - ✅ 端到端跑通"识别 → 创建/复用旗下账号 → 去重 + 转存 → 上架"
 
-### P2（账号融合 + qq 绑定）
+### P2a（QQ 绑定核心流程）
 
-- bot 起内部 HTTP server，暴露给 hfut：check_friend / send_private / send_group
-- hfut 加 redis 验证码 + qq 绑定/解绑 API + 旗下账号挂载逻辑
-- 前端绑定 / 解绑 / 学校覆盖确认页 + "进入你的 QQ 智能体"入口
-- 鉴权改造：主账号能操作自己 + 自己旗下账号的资源；service 层 user_id 校验改造
+- ✅ bot 内部 HTTP server（`internal/api/server.go`）：check-friend / send-private / send-group + Bearer token 鉴权
+- ✅ hfut bot 反向客户端（`package/botinternal/client.go`）：单例 + 自动 Init + sentinel error
+- ✅ hfut 3 个 user 端 API：`/user/qq-bind/request-code`、`/user/qq-bind/confirm`、`/user/qq-unbind`
+- ✅ redis 验证码 + 5min TTL + 同 user 限流（SetNX）
+- ✅ 严格 1:1 校验（主账号最多 1 个旗下账号，绑前必须先解绑旧的）
+- ✅ 学校归属覆盖（挂载时主账号 school_id 强覆盖旗下账号）
+- ✅ 解绑保留数据（parent_user_id 设回 NULL，旗下账号变孤儿，所有商品/提问保留）
+
+### P2b（鉴权改造 + 数据聚合，**下一次开干**）
+
+- 鉴权改造：主账号能读写"自己 + 旗下账号"的资源；service 层 user_id 校验改造
+- 数据聚合："我的商品"/"我的订单"列表合并展示（旗下账号那部分 tag "来自 QQ"）
+- 主账号 app "进入你的 QQ 智能体"入口（受限只读界面）
+
+### P2c（孤儿账号回复转发，**P2b 之后**）
+
+- 孤儿提问被 app 用户回复 → bot 在原群里 @ 那个 QQ 转发"来自 app 用户 X 的回答"
+- 孤儿商品的"联系卖家"按钮：不开聊天，弹"通过 QQ 联系：QQ-12345678"告示 + "请求下架"按钮
+- "请求下架"触发 bot 在群里 @ 卖家："你的商品 XX 是不是已出？回'是'就下架"
 
 ### P3（精度优化 + 边缘）
 

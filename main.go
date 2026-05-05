@@ -7,6 +7,7 @@ import (
 	_ "net/http/pprof"
 	"qq_bot/conf"
 	"qq_bot/global"
+	internalapi "qq_bot/internal/api"
 	"qq_bot/logic"
 	"qq_bot/utils/client_pool"
 	"qq_bot/utils/cmd"
@@ -118,7 +119,7 @@ func main() {
 	// Wg.Add(1) 必须由父协程在 `go ...` 之前调用，否则父协程可能"抢跑"到 Wg.Wait()
 	// 时各 goroutine 还没来得及自己 Add，counter 仍是 0，Wait 立刻返回，
 	// main 直接退出，bot 一启动就死。这是之前 time.Sleep 兜底掩盖的同一个 bug。
-	const backgroundJobs = 5 // WaitExit, ParseCmd, ClearCacheTicker, wsclient.Run, AutoReplyScanner
+	const backgroundJobs = 6 // WaitExit, ParseCmd, ClearCacheTicker, wsclient.Run, AutoReplyScanner, InternalAPI
 	for i := 0; i < backgroundJobs; i++ {
 		global.Wg.Add(1)
 	}
@@ -131,6 +132,9 @@ func main() {
 	// 群聊白名单的"窗口聚合"扫描协程：每 5s 扫一次所有 (group,user) 桶，沉默到时的就 flush。
 	// 仅当 Group.AutoReplyWhitelist 非空时这个协程才会真有事干；空白名单时它每 5s 空转一次没影响。
 	go logic.StartAutoReplyScanner(ctx, client_pool.NewClientPool())
+	// hfut 反向调用接口（QQ 绑定 / 转发等）。
+	// Internal.Token 为空时 Start() 立即 return，goroutine 也按 Wg.Done 正常释放。
+	go internalapi.Start(ctx)
 
 	// pprof 是 daemon 性质的调试入口，不参与 Wg（挂了也不该影响 bot 退出语义）。
 	go func() {
