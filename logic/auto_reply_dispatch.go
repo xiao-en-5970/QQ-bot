@@ -24,12 +24,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"qq_bot/global"
 	"qq_bot/model"
 	"qq_bot/utils/hfut"
 	"qq_bot/utils/kimi"
 	zaplog "qq_bot/utils/zap"
 	"strings"
+	"time"
 )
 
 // ackKind 回执等级枚举——决定 processSnapshot 要不要把这条 ack 真发到群里。
@@ -125,8 +128,10 @@ func qqNumberOf(userID int64) string {
 // =============================================================================
 
 func dispatchPublishGood(ctx context.Context, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
-	// 用 ImageMessageIDs 还原图片 URL（NapCat 临时 URL；图片有效期问题 P1.4b 阶段做 OSS 转存）
-	images := imageURLsFromSnap(snap, a.ImageMessageIDs)
+	// 用 ImageMessageIDs 还原图片 URL（NapCat 临时 URL）
+	napcatImages := imageURLsFromSnap(snap, a.ImageMessageIDs)
+	// 转存到 hfut OSS 拿永久 URL；任一张转存失败就 skip 那张（不让整体上架失败）
+	images := mirrorImagesToHfut(ctx, userID, napcatImages)
 
 	// price: nil/Negotiable=true → 0 + Negotiable=true，hfut 那边按 negotiable 跳过 price
 	priceCents := 0
@@ -194,11 +199,11 @@ func dispatchPublishGood(ctx context.Context, userID uint, snap []autoReplyMsg, 
 	}
 }
 
-// imageURLsFromSnap 按 message_id 在 snap 里找回原 segments，提取图片 URL。
+// imageURLsFromSnap 按 message_id 在 snap 里找回原 segments，提取图片 URL（NapCat 临时 URL）。
 //
-// 当前直接返回 NapCat 临时 URL——hfut 那边会原样存进 goods.images。
-// **TODO P1.4b**：bot 起一个内部 OSS 上传链路（先下载 NapCat 图，再上传到 hfut OSS），
-// 把"过期 URL"问题永久解决。短期内 NapCat URL 一般有效期足够 app 端访问，先这样跑。
+// 这一步只是"把窗口里的图找出来"——返回的还是 NapCat 临时 URL，没有持久化。
+// 调用方拿到这个列表后应该再走 mirrorImagesToHfut 把 URL 转成 hfut OSS 的永久 URL，
+// 再传给 PublishGood / PublishArticle 入库——否则 NapCat URL 几天后过期商品图就死链。
 func imageURLsFromSnap(snap []autoReplyMsg, msgIDs []int64) []string {
 	if len(msgIDs) == 0 {
 		return nil
@@ -230,17 +235,144 @@ func imageURLsFromSnap(snap []autoReplyMsg, msgIDs []int64) []string {
 	return urls
 }
 
+// mirrorImageDownloadTimeout 单张图从 NapCat 拉回 bot 的最长时间。
+//
+// NapCat 的图床通常在腾讯 multimedia.nt.qq.com.cn，国内访问几百毫秒内回；
+// 给到 15 秒已经留了网络抖动的余量。超时 = skip 这张图，不阻塞商品发布。
+const mirrorImageDownloadTimeout = 15 * time.Second
+
+// mirrorImageMaxBytes 单张图允许的最大字节数；跟 hfut 那边 BotUploadImageMaxBytes 对齐。
+//
+// 防御场景：恶意构造的 url 返回超大文件吃光 bot 内存。
+// 真实群聊照片普遍 < 2MB，10MB 已经是非常富余的兜底。
+const mirrorImageMaxBytes = 10 * 1024 * 1024
+
+// mirrorImagesToHfut 把 NapCat 临时 URL 列表转成 hfut OSS 永久 URL 列表。
+//
+// 流程（每张图独立走一遍）：
+//  1. http GET NapCat URL（带超时 + 大小上限）→ 拿到二进制
+//  2. 从 URL path / Content-Type 推断扩展名（jpg/png/...）
+//  3. 调 hfut.UploadImage 上传 → 拿到永久 URL
+//
+// 失败处理：**任何一张图的任何一步出错，仅 log + skip 这张**，继续下一张——
+// 商品少一张图比让"商品创建失败"友好得多。最终返回成功上传的 URL 列表。
+//
+// 若 global.Hfut 没配（理论上 dispatch 不会走到这里，防御性兜底），原样返 napcatURLs。
+func mirrorImagesToHfut(ctx context.Context, userID uint, napcatURLs []string) []string {
+	if len(napcatURLs) == 0 {
+		return nil
+	}
+	if global.Hfut == nil {
+		zaplog.Logger.Warnf("mirrorImagesToHfut: global.Hfut nil，回退到原 NapCat URL")
+		return napcatURLs
+	}
+	out := make([]string, 0, len(napcatURLs))
+	for i, srcURL := range napcatURLs {
+		hfutURL, err := mirrorOneImage(ctx, userID, srcURL)
+		if err != nil {
+			zaplog.Logger.Warnf("mirrorImagesToHfut 第 %d/%d 张转存失败 user=%d url=%q: %v",
+				i+1, len(napcatURLs), userID, truncateForLog(srcURL, 100), err)
+			continue
+		}
+		out = append(out, hfutURL)
+	}
+	if len(out) < len(napcatURLs) {
+		zaplog.Logger.Infof("mirrorImagesToHfut 部分失败 user=%d: %d/%d 成功",
+			userID, len(out), len(napcatURLs))
+	}
+	return out
+}
+
+// mirrorOneImage 单张图的转存：下载 → 推断扩展名 → 上传。
+//
+// 单独抽出来是为了让 mirrorImagesToHfut 的循环逻辑清晰；并且每张图用独立 ctx
+// 控制超时，一张失败不影响其它。
+func mirrorOneImage(parent context.Context, userID uint, srcURL string) (string, error) {
+	dlCtx, cancel := context.WithTimeout(parent, mirrorImageDownloadTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, srcURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("构造下载请求: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("下载图片: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return "", fmt.Errorf("下载图片 HTTP %d", resp.StatusCode)
+	}
+
+	// io.LimitReader 提前截断防 OOM；超过上限时拒收
+	limited := io.LimitReader(resp.Body, mirrorImageMaxBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return "", fmt.Errorf("读响应: %w", err)
+	}
+	if len(data) > mirrorImageMaxBytes {
+		return "", fmt.Errorf("图片超过 %dMB 上限", mirrorImageMaxBytes/1024/1024)
+	}
+	if len(data) == 0 {
+		return "", errors.New("下载到的图片为空")
+	}
+
+	filename := guessImageFilename(srcURL, resp.Header.Get("Content-Type"))
+
+	// 上传给独立留 30s 超时——内网调用，足够。
+	upCtx, upCancel := context.WithTimeout(parent, 30*time.Second)
+	defer upCancel()
+	resp2, err := global.Hfut.UploadImage(upCtx, userID, data, filename)
+	if err != nil {
+		return "", fmt.Errorf("上传到 hfut: %w", err)
+	}
+	return resp2.URL, nil
+}
+
+// guessImageFilename 给 hfut 那边一个像样的 filename；hfut 端只看扩展名做白名单。
+//
+// 优先级：URL path 里的扩展名 > Content-Type 推断 > 兜底 "img.jpg"。
+// 主要是为了应对 NapCat URL 形如 .../xxx?token=... 这种带 query 的格式，
+// 或者 URL path 完全没扩展名的极端情况。
+func guessImageFilename(srcURL, contentType string) string {
+	// 先看 URL path 末尾的扩展名（去掉 query / fragment）
+	clean := srcURL
+	if i := strings.IndexAny(clean, "?#"); i >= 0 {
+		clean = clean[:i]
+	}
+	for _, ext := range []string{".jpg", ".jpeg", ".png", ".gif", ".webp"} {
+		if strings.HasSuffix(strings.ToLower(clean), ext) {
+			return "img" + ext
+		}
+	}
+	// 再 fallback 到 Content-Type
+	switch strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])) {
+	case "image/jpeg", "image/jpg":
+		return "img.jpg"
+	case "image/png":
+		return "img.png"
+	case "image/gif":
+		return "img.gif"
+	case "image/webp":
+		return "img.webp"
+	}
+	// 最后兜底
+	return "img.jpg"
+}
+
 // =============================================================================
 // publish_question / publish_answer / close_question — 提问 + 回答
 // =============================================================================
 
 func dispatchPublishQuestion(ctx context.Context, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
+	napcatImages := imageURLsFromSnap(snap, a.ImageMessageIDs)
+	images := mirrorImagesToHfut(ctx, userID, napcatImages)
 	resp, err := global.Hfut.PublishArticle(ctx, hfut.PublishArticleReq{
 		UserID:  userID,
 		Type:    2, // 提问
 		Title:   strings.TrimSpace(a.QuestionTitle),
 		Content: strings.TrimSpace(orPlaceholder(a.QuestionContent, a.QuestionTitle)), // content 兜底用 title
-		Images:  imageURLsFromSnap(snap, a.ImageMessageIDs),
+		Images:  images,
 	})
 	if err != nil {
 		zaplog.Logger.Errorf("autoReply hfut PublishArticle(question) 失败 user=%d: %v", userID, err)

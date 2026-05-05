@@ -140,6 +140,32 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 - 如果用户明确说"我重新发一遍 XX 因为图模糊了" → bot 应该先调 `off_shelf` 把旧的下了，再调 `publish_good`，绕开去重
 - bot 层 LLM 判断不准时，hfut 兜底返回 409，bot 收到 409 后**不要慌张**——直接群里 @ 用户：「你这条跟之前的'XXX'撞了，要重发请先回'下架旧的'」
 
+### 图片转存（NapCat 临时 URL → hfut OSS 永久 URL）
+
+NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接，**几天后会失效**。如果 bot 直接把这个 URL 入 hfut goods.images，过几天用户在 app 看商品就只剩死链。
+
+**链路**（P1.4b 实现）：
+1. dispatch 拿到 RecognizeAction 后，先调 `imageURLsFromSnap` 找出 NapCat 临时 URL
+2. 调 `mirrorImagesToHfut(ctx, userID, urls)`：每张图独立走"GET NapCat URL → multipart POST 到 hfut → 拿永久 URL"
+3. 把转存后的永久 URL 列表传给 `PublishGood` / `PublishArticle` 入库
+
+**hfut 端接口**：`POST /api/v1/bot/images` (multipart/form-data)
+- 字段：`file`（二进制）+ `user_id`（int）
+- 走 `BotServiceAuth` 中间件，跟其他 bot 接口一致
+- 存到 OSS 路径 `user/{user_id}/bot/img_{snowflake}.{ext}`——用 user/ 前缀的"用户级图床"避开"good_id 还没建"的鸡生蛋问题
+- 限制：单张 ≤ 10MB；扩展名白名单 jpg/jpeg/png/gif/webp
+- 返回 `{ url: "<完整可达的 OSS URL>" }`
+
+**失败处理**（关键设计）：
+- **每张图独立**：循环里 try-catch 每张图的下载+上传，**任一张失败仅 skip 那张** + log warning，不阻塞其它图
+- **下载超时 15s / 上传超时 30s**：保证 dispatch 整体不会因为图片网络抖动卡死
+- **大小预检**：`io.LimitReader` 截断，超过 10MB 直接拒收，防 OOM
+- **0 张成功也允许商品发布**：`goods.images=[]` 比"商品创建失败"友好——商品至少是真实的
+
+**清理策略**（暂未实现）：
+- `user/{id}/bot/img_*` 路径下的图随 good 创建/删除不级联清理（路径里没有 good_id 关联）
+- 长期会堆积；P3 阶段加 cron 任务"清理 30 天前的 user/*/bot/img_* 文件"
+
 ---
 
 ## 临时账号 / 旗下账号 概念（hfut 后端配套设计，bot 间接依赖）
@@ -278,8 +304,16 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 | `GROUP_AUTO_REPLY_WHITELIST` | 启用自动监听的群号（逗号分隔） | 空 |
 | `BOT_AUTO_REPLY_WINDOW_SECONDS` | 同一发送者沉默 N 秒后触发窗口 | 60 |
 | `BOT_AUTO_REPLY_MAX_WINDOW_SIZE` | 同一窗口最多攒多少条（防超长） | 20 |
-| `GROUP_AUTO_REPLY_VERBOSITY` | 自动回复模式：`verbose` / `normal`（详见"无感模式"章节） | verbose |
+| `GROUP_AUTO_REPLY_VERBOSITY` | 自动回复模式：`verbose` / `normal`（详见"无感模式"子章节） | verbose |
 | `COMMANDS_ENABLED` | 启用的子命令（白名单） | 空 = 全禁用 |
+| `COMMANDS_DEFAULT` | 无前缀兜底命令 | 空 = 显示菜单 |
+| `GPT_API_KEY` | Moonshot API Key | 空 = 不启用聊天 |
+| `GPT_MAX_TOOL_ROUNDS` | Kimi 单次 Chat 工具往返上限 | 5 |
+| `GPT_MAX_CONTEXT_SIZE` | 单用户保留最近 N 轮对话 | 40 |
+| `HFUT_API_URL` | hfut 后端 base URL | — |
+| `HFUT_API_JWT_SECRET` | bot 跟 hfut 共享的 service-to-service JWT secret（HS256） | — |
+| `BOT_INTERNAL_API_PORT` | bot 内部 HTTP server 端口（hfut 调 bot 用，P2 启用） | — |
+| `BOT_INTERNAL_API_TOKEN` | bot 内部 API 鉴权 token | — |
 
 ### 无感模式（auto_reply_verbosity）
 
@@ -307,40 +341,33 @@ group:
 或 env：`GROUP_AUTO_REPLY_VERBOSITY=normal`，重启 bot 即生效。
 
 注意：抑制掉的回执仍然在 zap log 里以 `INFO autoReply ack 抑制 ...` 记录，便于审计——不是真的丢了。
-| `COMMANDS_DEFAULT` | 无前缀兜底命令 | 空 = 显示菜单 |
-| `GPT_API_KEY` | Moonshot API Key | 空 = 不启用聊天 |
-| `GPT_MAX_TOOL_ROUNDS` | Kimi 单次 Chat 工具往返上限 | 5 |
-| `GPT_MAX_CONTEXT_SIZE` | 单用户保留最近 N 轮对话 | 40 |
-| `HFUT_API_URL` | hfut 后端 base URL（P1 启用） | — |
-| `HFUT_API_SERVICE_TOKEN` | bot 调 hfut 的 service token（P1 启用） | — |
-| `BOT_INTERNAL_API_PORT` | bot 内部 HTTP server 端口（hfut 调 bot 用，P2 启用） | — |
-| `BOT_INTERNAL_API_TOKEN` | bot 内部 API 鉴权 token | — |
 
 ---
 
 ## 实施分期
 
-### P0（**当前阶段**，纯 bot 内部，0 hfut 改动）
+### P0（窗口聚合 + 识别 + 占位 ack，纯 bot 内部）
 
 - ✅ 加 `BOT_AUTO_REPLY_WINDOW_SECONDS` / `BOT_AUTO_REPLY_MAX_WINDOW_SIZE`
 - ✅ `read_skill` 路径白名单（只允许 bot/）
-- ⬜ `handleAutoReply` 加 per-(group, user) 滑动窗口聚合，60s 沉默触发
-- ⬜ 调 Kimi 识别（系统 prompt 严格判定为业务动作之一才返回结构化 JSON）
-- ⬜ **不真上架，只在群里 @ 用户回一句"识别到你想上架/提问/下架 XXX，业务接通中"**
-- ⬜ 验证识别准确度
+- ✅ `handleAutoReply` 加 per-(group, user) 滑动窗口聚合，60s 沉默触发
+- ✅ 调 Kimi 识别（系统 prompt 严格判定为业务动作之一才返回结构化 JSON）
+- ✅ 不真上架，只在群里 @ 用户回 "[识别测试] 识别到你想上架/提问/下架 XXX"
+- ✅ 验证识别准确度
 
-### P1（hfut 后端临时号 + bot 上下架）
+### P1（hfut 后端临时号 + bot 上下架 + 转存 + 去重）
 
-- hfut 数据库改造：
+- ✅ hfut 数据库改造：
   - `users` 加 `account_type` / `qq_number` / `parent_user_id` 字段
   - `articles` 加 `status=close`
-  - `goods` `price` 改为 nullable（面议）
-  - `schools` 加 `qq_groups` 字段（或新建 `school_qq_groups` 表）
-- hfut 加 `/api/v1/bot/*` service 接口 + token 鉴权 middleware
-- hfut service 层加去重检查（`IsLikelyDuplicate`）；`POST /goods` 命中重复时返回 409 + 已存在 ID
-- bot 加 hfut 客户端封装 + 工具集实现（publish_good / off_shelf / list_my_active_goods / publish_question / publish_answer / reply_in_group）
-- bot publish_good 前必先调 list_my_active_goods 让 LLM 自查是否重复
-- 端到端跑通"识别 → 创建/复用旗下账号 → 去重检查 → 上架"
+  - `goods` 加 `negotiable` 字段（面议）
+  - `schools` 加 `qq_groups` 字段
+- ✅ hfut `/api/v1/bot/*` service 接口 + JWT 鉴权 middleware（HS256，0 维护数据库 token）
+- ✅ hfut service 层去重检查（`FindLikelyDuplicates`）；`POST /goods` 命中返回 409 + 已存在 ID
+- ✅ bot hfut 客户端封装：UpsertQQChild / PublishGood / OffShelfGood / ListActiveGoods / PublishArticle / CloseArticle / ListOpenQuestions / UploadImage
+- ✅ bot 自动回复 verbosity 开关（verbose / normal），生产无感模式
+- ✅ 图片转存（NapCat 临时 URL → hfut OSS 永久 URL，单张失败不影响整体）
+- ✅ 端到端跑通"识别 → 创建/复用旗下账号 → 去重 + 转存 → 上架"
 
 ### P2（账号融合 + qq 绑定）
 

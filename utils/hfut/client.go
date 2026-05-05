@@ -22,7 +22,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -316,6 +318,103 @@ func (c *Client) PublishArticle(ctx context.Context, req PublishArticleReq) (*Pu
 func (c *Client) CloseArticle(ctx context.Context, articleID uint, callerUserID uint) error {
 	body := map[string]interface{}{"user_id": callerUserID}
 	return c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/api/v1/bot/articles/%d/close", articleID), body, nil)
+}
+
+// UploadImageResp 转存图片成功后 hfut 返回的永久 URL。
+type UploadImageResp struct {
+	URL string `json:"url"`
+}
+
+// UploadImage 把一张图（NapCat 临时 URL 下载后的二进制）上传到 hfut OSS，返回永久 URL。
+//
+// 参数：
+//
+//	userID    图归属的用户 id（旗下账号 / 主账号）；hfut 会存到 user/{userID}/bot/...
+//	data      图片二进制
+//	filename  扩展名靠它推断；NapCat 不一定给得出像样的 filename，调用方可以
+//	          fallback "img.jpg"——hfut 端只看扩展名，jpg/jpeg/png/gif/webp 才接受
+//
+// 错误：
+//   - hfut 拒收（4xx）→ ClientError，上层 log 后跳过这张图，不重试
+//   - 网络错 → 通用 error，同上
+//   - 任何错误都不应该让上层 panic，上层 mirror helper 应当 skip 这张图继续处理下一张
+func (c *Client) UploadImage(ctx context.Context, userID uint, data []byte, filename string) (*UploadImageResp, error) {
+	if len(data) == 0 {
+		return nil, errors.New("hfut.UploadImage: data 不能为空")
+	}
+	if filename == "" {
+		filename = "img.jpg"
+	}
+
+	// 构造 multipart body
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	if err := w.WriteField("user_id", strconv.FormatUint(uint64(userID), 10)); err != nil {
+		return nil, fmt.Errorf("hfut.UploadImage: 写 user_id 字段失败: %w", err)
+	}
+	fileWriter, err := w.CreateFormFile("file", filename)
+	if err != nil {
+		return nil, fmt.Errorf("hfut.UploadImage: 创建 file 字段失败: %w", err)
+	}
+	if _, err := fileWriter.Write(data); err != nil {
+		return nil, fmt.Errorf("hfut.UploadImage: 写图片二进制失败: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("hfut.UploadImage: 关闭 multipart 失败: %w", err)
+	}
+
+	url := c.baseURL + "/api/v1/bot/images"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &body)
+	if err != nil {
+		return nil, fmt.Errorf("hfut.UploadImage: 创建请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	token, err := c.signToken()
+	if err != nil {
+		return nil, fmt.Errorf("hfut.UploadImage: 签 service token 失败: %w", err)
+	}
+	req.Header.Set(headerServiceToken, token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("hfut.UploadImage: 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("hfut.UploadImage: 读响应失败: %w", err)
+	}
+
+	var env hfutEnvelope
+	if err := json.Unmarshal(respBody, &env); err != nil {
+		if resp.StatusCode/100 != 2 {
+			return nil, fmt.Errorf("hfut.UploadImage: HTTP %d 且信封解析失败: %s",
+				resp.StatusCode, truncate(string(respBody), 200))
+		}
+		return nil, fmt.Errorf("hfut.UploadImage: 信封解析失败: %w (raw=%s)",
+			err, truncate(string(respBody), 200))
+	}
+	if env.Code != 200 || resp.StatusCode/100 != 2 {
+		return nil, &ClientError{
+			HTTPStatus: resp.StatusCode,
+			BizCode:    env.Code,
+			Message:    env.Message,
+			RawData:    env.Data,
+		}
+	}
+
+	var out UploadImageResp
+	if len(env.Data) > 0 && string(env.Data) != "null" {
+		if err := json.Unmarshal(env.Data, &out); err != nil {
+			return nil, fmt.Errorf("hfut.UploadImage: data 解析失败: %w", err)
+		}
+	}
+	if out.URL == "" {
+		return nil, errors.New("hfut.UploadImage: hfut 返回的 url 为空")
+	}
+	return &out, nil
 }
 
 // ListOpenQuestions 列群内开放提问（answer 时定 parent_id 用）。
