@@ -125,9 +125,10 @@ func newJTI() (string, error) {
 
 // ClientError 表达"hfut 返回了非 2xx 业务错"——区别于网络错。
 type ClientError struct {
-	HTTPStatus int    // HTTP 状态码
-	BizCode    int    // hfut 信封里的 code
-	Message    string // hfut 信封里的 message
+	HTTPStatus int             // HTTP 状态码
+	BizCode    int             // hfut 信封里的 code
+	Message    string          // hfut 信封里的 message
+	RawData    json.RawMessage // 业务错误时 hfut 回的 data 字段（如 409 重复时含 existing_id）；上层按需解析
 }
 
 func (e *ClientError) Error() string {
@@ -139,6 +140,19 @@ func (e *ClientError) Error() string {
 // auto_reply 看到这个错应该完全静默——本群压根没在 schools.qq_groups 注册过，
 // 不是 bot 该处理的群。
 var ErrGroupNoSchool = errors.New("hfut: 当前群未配置学校，bot 应忽略本群")
+
+// DuplicateGoodInfo 触发去重保护时 hfut 返回的"已存在商品"信息。
+//
+// PublishGood 命中去重时 err 被包成 *DuplicateGoodInfo（也实现 error 接口），
+// 上层用 errors.As 识别后可以拿 ExistingID / ExistingTitle 给用户友好提示。
+type DuplicateGoodInfo struct {
+	ExistingID    uint
+	ExistingTitle string
+}
+
+func (e *DuplicateGoodInfo) Error() string {
+	return fmt.Sprintf("hfut: 检测到 7 天内已有同款商品 (id=%d, title=%q)", e.ExistingID, e.ExistingTitle)
+}
 
 // =============================================================================
 // 请求 / 响应类型（跟 hfut 那边的 service.Bot* 结构对齐）
@@ -240,9 +254,28 @@ func (c *Client) UpsertQQChild(ctx context.Context, qqNumber string, groupID int
 }
 
 // PublishGood 上架商品。返回 good_id。
+//
+// 触发去重保护时返回 *DuplicateGoodInfo（实现了 error 接口）——上层用 errors.As 识别，
+// 可以拿到已存在商品的 id + title 做友好提示。
 func (c *Client) PublishGood(ctx context.Context, req PublishGoodReq) (*PublishGoodResp, error) {
 	var out PublishGoodResp
-	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/bot/goods", req, &out); err != nil {
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/bot/goods", req, &out)
+	if err != nil {
+		// hfut 返 409 + biz code 4090 表示重复，data 里夹 existing_id / existing_title
+		var ce *ClientError
+		if errors.As(err, &ce) && ce.HTTPStatus == http.StatusConflict && ce.BizCode == 4090 {
+			info := &DuplicateGoodInfo{}
+			if len(ce.RawData) > 0 {
+				var raw struct {
+					ExistingID    uint   `json:"existing_id"`
+					ExistingTitle string `json:"existing_title"`
+				}
+				_ = json.Unmarshal(ce.RawData, &raw)
+				info.ExistingID = raw.ExistingID
+				info.ExistingTitle = raw.ExistingTitle
+			}
+			return nil, info
+		}
 		return nil, err
 	}
 	return &out, nil
@@ -356,12 +389,15 @@ func (c *Client) doJSON(ctx context.Context, method, path string, reqBody interf
 		return fmt.Errorf("hfut: 信封解析失败: %w (raw=%s)", err, truncate(string(respBody), 200))
 	}
 
-	// 业务码不为 200 视作业务错；HTTP 非 2xx 同样视作错
+	// 业务码不为 200 视作业务错；HTTP 非 2xx 同样视作错。
+	// 错误情况下也把 data 字段一起带回去——某些业务错会在 data 里夹元信息（如 409 去重时
+	// 的 existing_id / existing_title），上层按 BizCode 自己决定要不要解析。
 	if env.Code != 200 || resp.StatusCode/100 != 2 {
 		return &ClientError{
 			HTTPStatus: resp.StatusCode,
 			BizCode:    env.Code,
 			Message:    env.Message,
+			RawData:    env.Data,
 		}
 	}
 

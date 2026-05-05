@@ -5,7 +5,16 @@
 //
 //	processSnapshot 拿到识别结果 → 对每条 action 调 dispatchActionToHfut →
 //	  upsert 旗下账号 → 按 action.Type 分流到 publish/off-shelf/article 等 →
-//	  返回一段群里 @ 用户的回执文字（成功 or 失败都返回，空串表示完全静默）
+//	  返回 ackResult{text, kind}：text 是要群里 @ 用户的文字，kind 是回执等级。
+//	processSnapshot 按 conf.Group.AutoReplyVerbosity 决定要不要把这条回执真发到群里。
+//
+// 回执等级（ackKind）：
+//
+//	ackKindSuccess  真落库成功（含 goods_id/article_id）——任何模式都发
+//	ackKindDup      去重命中（成功阻止重复，用户需要知道）——任何模式都发
+//	ackKindAskUser  反问（多个在售/没指明哪条）——任何模式都发，用户主动发起的必须反馈
+//	ackKindFail     hfut 同步失败/网络错——只在 verbose 模式发，normal 模式静默
+//	ackKindIgnore   完全静默（如群没配学校）——任何模式都不发
 //
 // global.Hfut == nil 时（HFUT_API_URL/TOKEN 没配齐）这文件不会被调用，
 // auto_reply.go 会回退到 P0 的 buildAckMessage 占位 ack。
@@ -23,9 +32,44 @@ import (
 	"strings"
 )
 
-// dispatchActionToHfut 把一条 RecognizeAction 落到 hfut 后端，返回要回到群里的回执文字。
+// ackKind 回执等级枚举——决定 processSnapshot 要不要把这条 ack 真发到群里。
 //
-// 返回 "" 表示**不在群里发任何提示**（用于"群没配学校"这类应该完全静默的场景）。
+// 详见包头注释。
+type ackKind int
+
+const (
+	ackKindIgnore  ackKind = iota // 完全静默，任何模式都不发
+	ackKindFail                   // 同步 hfut 失败 / 网络错——verbose 才发，normal 静默
+	ackKindAskUser                // 反问，必须发
+	ackKindDup                    // 去重命中，必须发
+	ackKindSuccess                // 真落库成功，必须发
+)
+
+// ackResult dispatch 函数的统一返回类型——把"回执文字"和"回执等级"绑在一起，
+// 让 processSnapshot 那一层根据 verbosity 决定是否发出。
+type ackResult struct {
+	Text string
+	Kind ackKind
+}
+
+// shouldEmit 当前 verbosity 下这条 ack 是否应该真发到群里。
+func (r ackResult) shouldEmit(verbose bool) bool {
+	if r.Text == "" {
+		return false
+	}
+	switch r.Kind {
+	case ackKindIgnore:
+		return false
+	case ackKindFail:
+		return verbose // normal 模式静默
+	default: // success / dup / ask_user
+		return true
+	}
+}
+
+// dispatchActionToHfut 把一条 RecognizeAction 落到 hfut 后端，返回 ackResult。
+//
+// processSnapshot 那一层按 conf.Group.AutoReplyVerbosity 决定 ackResult 是否真发到群。
 //
 // 输入 snap 用于按 ImageMessageIDs 还原图片 URL 给 publish_good。
 func dispatchActionToHfut(
@@ -34,7 +78,7 @@ func dispatchActionToHfut(
 	userCard string,
 	snap []autoReplyMsg,
 	action kimi.RecognizeAction,
-) string {
+) ackResult {
 	// 第 1 步：upsert 旗下账号——所有写操作都需要 user_id。
 	upsert, err := global.Hfut.UpsertQQChild(ctx, qqNumberOf(key.UserID), key.GroupID, userCard)
 	if err != nil {
@@ -42,10 +86,10 @@ func dispatchActionToHfut(
 		if errors.Is(err, hfut.ErrGroupNoSchool) {
 			zaplog.Logger.Debugf("autoReply group=%d user=%d 群没配学校，静默忽略 action %s",
 				key.GroupID, key.UserID, action.Type)
-			return ""
+			return ackResult{Kind: ackKindIgnore}
 		}
 		zaplog.Logger.Errorf("autoReply hfut UpsertQQChild 失败 group=%d user=%d: %v", key.GroupID, key.UserID, err)
-		return "[bot] 系统繁忙（账号同步失败），稍后再来"
+		return ackResult{Text: "[bot] 系统繁忙（账号同步失败），稍后再来", Kind: ackKindFail}
 	}
 	if upsert.Created {
 		zaplog.Logger.Infof("autoReply 创建旗下账号 group=%d qq=%d → user_id=%d school_id=%d",
@@ -66,7 +110,7 @@ func dispatchActionToHfut(
 		return dispatchCloseQuestion(ctx, key.GroupID, upsert.UserID, action)
 	default:
 		// 未知 type 不该走到这里（processSnapshot 那边已经过滤过 none）
-		return ""
+		return ackResult{Kind: ackKindIgnore}
 	}
 }
 
@@ -80,7 +124,7 @@ func qqNumberOf(userID int64) string {
 // publish_good — 上架商品
 // =============================================================================
 
-func dispatchPublishGood(ctx context.Context, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) string {
+func dispatchPublishGood(ctx context.Context, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
 	// 用 ImageMessageIDs 还原图片 URL（NapCat 临时 URL；图片有效期问题 P1.4b 阶段做 OSS 转存）
 	images := imageURLsFromSnap(snap, a.ImageMessageIDs)
 
@@ -102,8 +146,28 @@ func dispatchPublishGood(ctx context.Context, userID uint, snap []autoReplyMsg, 
 		Images:     images,
 	})
 	if err != nil {
+		// 去重保护命中——不视为失败，给用户友好提示，不重复上架
+		var dup *hfut.DuplicateGoodInfo
+		if errors.As(err, &dup) {
+			zaplog.Logger.Infof("autoReply 去重命中 user=%d title=%q existing=%d/%q",
+				userID, a.Title, dup.ExistingID, dup.ExistingTitle)
+			if dup.ExistingTitle != "" {
+				return ackResult{
+					Text: fmt.Sprintf("你最近已经发过类似的「%s」（goods_id=%d），没有重复上架；如要重发请先回复'下架旧的'",
+						dup.ExistingTitle, dup.ExistingID),
+					Kind: ackKindDup,
+				}
+			}
+			return ackResult{
+				Text: "你最近已经发过类似的商品，没有重复上架；如要重发请先回复'下架旧的'",
+				Kind: ackKindDup,
+			}
+		}
 		zaplog.Logger.Errorf("autoReply hfut PublishGood 失败 user=%d title=%q: %v", userID, a.Title, err)
-		return fmt.Sprintf("已识别到「%s」，但同步到 app 失败了，稍后再试", orPlaceholder(a.Title, "(无标题)"))
+		return ackResult{
+			Text: fmt.Sprintf("已识别到「%s」，但同步到 app 失败了，稍后再试", orPlaceholder(a.Title, "(无标题)")),
+			Kind: ackKindFail,
+		}
 	}
 
 	// 成功回执：含商品 id；不带 url 因为前端 deep link 还没设计
@@ -123,8 +187,11 @@ func dispatchPublishGood(ctx context.Context, userID uint, snap []autoReplyMsg, 
 	if a.Location != "" {
 		locPart = "，地点 " + a.Location
 	}
-	return fmt.Sprintf("已为你上架%s「%s」%s%s%s（goods_id=%d）",
-		category, orPlaceholder(a.Title, "(无标题)"), "："+priceStr, locPart, imgPart, resp.GoodID)
+	return ackResult{
+		Text: fmt.Sprintf("已为你上架%s「%s」%s%s%s（goods_id=%d）",
+			category, orPlaceholder(a.Title, "(无标题)"), "："+priceStr, locPart, imgPart, resp.GoodID),
+		Kind: ackKindSuccess,
+	}
 }
 
 // imageURLsFromSnap 按 message_id 在 snap 里找回原 segments，提取图片 URL。
@@ -167,7 +234,7 @@ func imageURLsFromSnap(snap []autoReplyMsg, msgIDs []int64) []string {
 // publish_question / publish_answer / close_question — 提问 + 回答
 // =============================================================================
 
-func dispatchPublishQuestion(ctx context.Context, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) string {
+func dispatchPublishQuestion(ctx context.Context, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
 	resp, err := global.Hfut.PublishArticle(ctx, hfut.PublishArticleReq{
 		UserID:  userID,
 		Type:    2, // 提问
@@ -177,26 +244,38 @@ func dispatchPublishQuestion(ctx context.Context, userID uint, snap []autoReplyM
 	})
 	if err != nil {
 		zaplog.Logger.Errorf("autoReply hfut PublishArticle(question) 失败 user=%d: %v", userID, err)
-		return fmt.Sprintf("已识别到提问「%s」，但同步到 app 失败了，稍后再试",
-			orPlaceholder(a.QuestionTitle, "(未识别标题)"))
+		return ackResult{
+			Text: fmt.Sprintf("已识别到提问「%s」，但同步到 app 失败了，稍后再试",
+				orPlaceholder(a.QuestionTitle, "(未识别标题)")),
+			Kind: ackKindFail,
+		}
 	}
-	return fmt.Sprintf("已为你发布提问「%s」（article_id=%d）",
-		orPlaceholder(a.QuestionTitle, "(未识别标题)"), resp.ArticleID)
+	return ackResult{
+		Text: fmt.Sprintf("已为你发布提问「%s」（article_id=%d）",
+			orPlaceholder(a.QuestionTitle, "(未识别标题)"), resp.ArticleID),
+		Kind: ackKindSuccess,
+	}
 }
 
-func dispatchPublishAnswer(ctx context.Context, groupID int64, userID uint, a kimi.RecognizeAction) string {
+func dispatchPublishAnswer(ctx context.Context, groupID int64, userID uint, a kimi.RecognizeAction) ackResult {
 	hint := strings.TrimSpace(a.AnswerHintTo)
 	if hint == "" {
-		return "已识别到你想回答群里某条提问，但没说清楚是哪条，请明确提到关键词后再发"
+		return ackResult{
+			Text: "已识别到你想回答群里某条提问，但没说清楚是哪条，请明确提到关键词后再发",
+			Kind: ackKindAskUser,
+		}
 	}
 	openQs, err := global.Hfut.ListOpenQuestions(ctx, groupID, 20)
 	if err != nil {
 		zaplog.Logger.Errorf("autoReply ListOpenQuestions 失败 group=%d: %v", groupID, err)
-		return "已识别到你想回答某条提问，但同步到 app 失败了，稍后再试"
+		return ackResult{Text: "已识别到你想回答某条提问，但同步到 app 失败了，稍后再试", Kind: ackKindFail}
 	}
 	parent := matchQuestion(openQs, hint)
 	if parent == nil {
-		return fmt.Sprintf("已识别到你想回答「%s」，但 app 里没找到对应的提问；可能那条提问还没被同步", hint)
+		return ackResult{
+			Text: fmt.Sprintf("已识别到你想回答「%s」，但 app 里没找到对应的提问；可能那条提问还没被同步", hint),
+			Kind: ackKindAskUser,
+		}
 	}
 	pid := int(parent.ID)
 	resp, err := global.Hfut.PublishArticle(ctx, hfut.PublishArticleReq{
@@ -208,22 +287,28 @@ func dispatchPublishAnswer(ctx context.Context, groupID int64, userID uint, a ki
 	})
 	if err != nil {
 		zaplog.Logger.Errorf("autoReply hfut PublishArticle(answer) 失败 user=%d parent=%d: %v", userID, pid, err)
-		return fmt.Sprintf("已识别到你想回答「%s」，但同步到 app 失败了，稍后再试", parent.Title)
+		return ackResult{
+			Text: fmt.Sprintf("已识别到你想回答「%s」，但同步到 app 失败了，稍后再试", parent.Title),
+			Kind: ackKindFail,
+		}
 	}
-	return fmt.Sprintf("已为你提交对「%s」的回答（article_id=%d）", parent.Title, resp.ArticleID)
+	return ackResult{
+		Text: fmt.Sprintf("已为你提交对「%s」的回答（article_id=%d）", parent.Title, resp.ArticleID),
+		Kind: ackKindSuccess,
+	}
 }
 
-func dispatchCloseQuestion(ctx context.Context, groupID int64, userID uint, a kimi.RecognizeAction) string {
+func dispatchCloseQuestion(ctx context.Context, groupID int64, userID uint, a kimi.RecognizeAction) ackResult {
 	hint := strings.TrimSpace(a.CloseQuestionHint)
 	openQs, err := global.Hfut.ListOpenQuestions(ctx, groupID, 20)
 	if err != nil {
 		zaplog.Logger.Errorf("autoReply ListOpenQuestions(close) 失败 group=%d: %v", groupID, err)
-		return "已识别到你想关闭提问，但同步到 app 失败了，稍后再试"
+		return ackResult{Text: "已识别到你想关闭提问，但同步到 app 失败了，稍后再试", Kind: ackKindFail}
 	}
 	// 只考虑这个 user 自己发布的提问；筛出后再匹配 hint
 	mine := filterMyQuestions(openQs, userID)
 	if len(mine) == 0 {
-		return "你目前在 app 里没有开放中的提问可关闭"
+		return ackResult{Text: "你目前在 app 里没有开放中的提问可关闭", Kind: ackKindAskUser}
 	}
 	var target *hfut.OpenQuestion
 	if hint == "" && len(mine) == 1 {
@@ -237,28 +322,34 @@ func dispatchCloseQuestion(ctx context.Context, groupID int64, userID uint, a ki
 		for _, q := range mine {
 			titles = append(titles, "「"+q.Title+"」")
 		}
-		return fmt.Sprintf("你最近在挂这几条提问：%s，请明确说要关闭哪一条", strings.Join(titles, "、"))
+		return ackResult{
+			Text: fmt.Sprintf("你最近在挂这几条提问：%s，请明确说要关闭哪一条", strings.Join(titles, "、")),
+			Kind: ackKindAskUser,
+		}
 	}
 	if err := global.Hfut.CloseArticle(ctx, target.ID, userID); err != nil {
 		zaplog.Logger.Errorf("autoReply hfut CloseArticle 失败 article=%d: %v", target.ID, err)
-		return fmt.Sprintf("已识别到你想关闭「%s」，但同步到 app 失败了，稍后再试", target.Title)
+		return ackResult{
+			Text: fmt.Sprintf("已识别到你想关闭「%s」，但同步到 app 失败了，稍后再试", target.Title),
+			Kind: ackKindFail,
+		}
 	}
-	return fmt.Sprintf("已为你关闭提问「%s」", target.Title)
+	return ackResult{Text: fmt.Sprintf("已为你关闭提问「%s」", target.Title), Kind: ackKindSuccess}
 }
 
 // =============================================================================
 // off_shelf — 下架商品
 // =============================================================================
 
-func dispatchOffShelf(ctx context.Context, userID uint, a kimi.RecognizeAction) string {
+func dispatchOffShelf(ctx context.Context, userID uint, a kimi.RecognizeAction) ackResult {
 	hint := strings.TrimSpace(a.OffShelfHint)
 	goods, err := global.Hfut.ListActiveGoods(ctx, userID, 20)
 	if err != nil {
 		zaplog.Logger.Errorf("autoReply ListActiveGoods 失败 user=%d: %v", userID, err)
-		return "已识别到你想下架商品，但同步到 app 失败了，稍后再试"
+		return ackResult{Text: "已识别到你想下架商品，但同步到 app 失败了，稍后再试", Kind: ackKindFail}
 	}
 	if len(goods) == 0 {
-		return "你目前在 app 里没有在售商品可下架"
+		return ackResult{Text: "你目前在 app 里没有在售商品可下架", Kind: ackKindAskUser}
 	}
 	// 单一在售直接下；多个 + 用户没指明 → 反问
 	var target *hfut.ActiveGood
@@ -272,13 +363,19 @@ func dispatchOffShelf(ctx context.Context, userID uint, a kimi.RecognizeAction) 
 		for _, g := range goods {
 			titles = append(titles, "「"+g.Title+"」")
 		}
-		return fmt.Sprintf("你最近在挂这几件：%s，请明确说要下架哪一个", strings.Join(titles, "、"))
+		return ackResult{
+			Text: fmt.Sprintf("你最近在挂这几件：%s，请明确说要下架哪一个", strings.Join(titles, "、")),
+			Kind: ackKindAskUser,
+		}
 	}
 	if err := global.Hfut.OffShelfGood(ctx, target.ID, userID); err != nil {
 		zaplog.Logger.Errorf("autoReply hfut OffShelfGood 失败 good=%d: %v", target.ID, err)
-		return fmt.Sprintf("已识别到你想下架「%s」，但同步到 app 失败了，稍后再试", target.Title)
+		return ackResult{
+			Text: fmt.Sprintf("已识别到你想下架「%s」，但同步到 app 失败了，稍后再试", target.Title),
+			Kind: ackKindFail,
+		}
 	}
-	return fmt.Sprintf("已为你下架「%s」", target.Title)
+	return ackResult{Text: fmt.Sprintf("已为你下架「%s」", target.Title), Kind: ackKindSuccess}
 }
 
 // =============================================================================

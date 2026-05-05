@@ -90,6 +90,20 @@ type Log struct {
 //
 //	默认 20 条。
 //
+// AutoReplyVerbosity 控制 bot 在群里"开口的频率"。
+//
+//	verbose（默认，推荐开发/调试用）：所有 dispatch 函数返回的回执都发——
+//	  含成功落库 / 去重命中 / 反问 / 同步失败 等所有动作。这是当前调试期的行为。
+//	normal（推荐生产用）：只在"产生了实际后果"才出声——
+//	  - 真落库成功（含 goods_id / article_id）
+//	  - 去重命中（用户需要知道为什么没发）
+//	  - 反问（多个在售时让用户指明，用户主动发起的必须反馈）
+//	  其它情况静默：同步 hfut 失败、网络错、识别失败兜底——避免让群友看到无意义错误，
+//	  让 bot 体验更"无感"（用户没主动喊 bot，就不该出现 bot 的提示）。
+//
+//	生产切换方式：env 设 GROUP_AUTO_REPLY_VERBOSITY=normal 或 yaml 改这个字段，
+//	不需要重新发版。SKILL.md 的"无感模式"章节有详细说明。
+//
 // 历史的 get_group_history_interval / update_group_list_interval / retry 字段已弃用
 // （WS 模式不再轮询历史消息），yaml 里如果还有这些字段会被 viper 静默忽略。
 type Group struct {
@@ -97,6 +111,7 @@ type Group struct {
 	AutoReplyWhitelist     []int64 `mapstructure:"auto_reply_whitelist,omitempty"`
 	AutoReplyWindowSeconds int     `mapstructure:"auto_reply_window_seconds,omitempty"`
 	AutoReplyMaxWindowSize int     `mapstructure:"auto_reply_max_window_size,omitempty"`
+	AutoReplyVerbosity     string  `mapstructure:"auto_reply_verbosity,omitempty"`
 }
 
 // IsAutoReplyGroup 判断某群是否启用了"非 @bot 也回复"白名单模式。
@@ -107,6 +122,15 @@ func (g Group) IsAutoReplyGroup(groupID int64) bool {
 		}
 	}
 	return false
+}
+
+// IsAutoReplyVerbose 当前 verbosity 是否 verbose（默认/未配置 = verbose）。
+//
+// 注意：null/空串/任何不认识的值都视作 verbose——这是为了让"忘记配 / 配错"时仍然
+// 保持开发者友好的 debug 行为，而不是悄无声息地把回执全屏蔽。
+// 想真切到生产无感模式，必须显式配 normal。
+func (g Group) IsAutoReplyVerbose() bool {
+	return strings.ToLower(strings.TrimSpace(g.AutoReplyVerbosity)) != "normal"
 }
 
 // Commands 子命令开关 + 默认命令兜底。
@@ -288,6 +312,7 @@ func bindEnvKeys() {
 		"group.auto_reply_whitelist",
 		"group.auto_reply_window_seconds",
 		"group.auto_reply_max_window_size",
+		"group.auto_reply_verbosity",
 		"user.user_id",
 		"cache.tmp_dir", "cache.pdf_tmp_dir", "cache.max_size", "cache.clear_interval",
 		"tools.jmcomic_bin", "tools.img2pdf_bin", "tools.python_bin",

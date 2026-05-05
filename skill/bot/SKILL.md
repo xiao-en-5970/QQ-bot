@@ -278,7 +278,35 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 | `GROUP_AUTO_REPLY_WHITELIST` | 启用自动监听的群号（逗号分隔） | 空 |
 | `BOT_AUTO_REPLY_WINDOW_SECONDS` | 同一发送者沉默 N 秒后触发窗口 | 60 |
 | `BOT_AUTO_REPLY_MAX_WINDOW_SIZE` | 同一窗口最多攒多少条（防超长） | 20 |
+| `GROUP_AUTO_REPLY_VERBOSITY` | 自动回复模式：`verbose` / `normal`（详见"无感模式"章节） | verbose |
 | `COMMANDS_ENABLED` | 启用的子命令（白名单） | 空 = 全禁用 |
+
+### 无感模式（auto_reply_verbosity）
+
+bot 在自动监听路径下会按"识别动作"输出回执，回执有 5 类等级（`logic.ackKind`）：
+
+| 等级 | 例子 | verbose 模式发？ | normal 模式发？ |
+|---|---|---|---|
+| `success` | "已为你上架二手「鞋架」：6 元（goods_id=42）" | ✅ | ✅ |
+| `dup` | "你最近已经发过类似的「鞋架」（goods_id=42），没有重复上架..." | ✅ | ✅ |
+| `ask_user` | "你最近在挂这几件：「A」「B」，请明确说要下架哪一个" | ✅ | ✅ |
+| `fail` | "已识别到「X」，但同步到 app 失败了，稍后再试" | ✅ | ❌ 静默 |
+| `ignore` | 群没配学校 / 未识别动作（none） | ❌ 静默 | ❌ 静默 |
+
+设计动机：
+- **生产环境**用户没主动喊 bot，bot 只在"产生了实际后果"才出声——`success` / `dup` / `ask_user` 都是用户**需要**知道的
+- 反过来 `fail`（如 hfut 网络抖一下）在群里抛错没意义，反而让群友迷惑——`normal` 模式悄悄重试 / 完全静默更友好
+- **开发调试**开 `verbose` 把所有路径都暴露，方便看 bot 在干啥
+- 默认 `verbose`——忘配 / 配错时倾向"开发友好"（看得到日志）而不是"悄无声息"
+
+切换：
+```yaml
+group:
+  auto_reply_verbosity: normal   # 生产推荐
+```
+或 env：`GROUP_AUTO_REPLY_VERBOSITY=normal`，重启 bot 即生效。
+
+注意：抑制掉的回执仍然在 zap log 里以 `INFO autoReply ack 抑制 ...` 记录，便于审计——不是真的丢了。
 | `COMMANDS_DEFAULT` | 无前缀兜底命令 | 空 = 显示菜单 |
 | `GPT_API_KEY` | Moonshot API Key | 空 = 不启用聊天 |
 | `GPT_MAX_TOOL_ROUNDS` | Kimi 单次 Chat 工具往返上限 | 5 |

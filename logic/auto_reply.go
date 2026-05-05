@@ -206,22 +206,28 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 			continue
 		}
 
-		// 选回执文案：
-		//   - hfut 已配置 → 真调 hfut（内部 upsert 旗下账号 + 落库），返回真实回执
-		//   - hfut 未配置 → P0 占位 ack（[识别测试] xxx 暂未真发布）
-		var ack string
+		// 选回执文案 + 等级：
+		//   - hfut 已配置 → 真调 hfut（内部 upsert 旗下账号 + 落库），返回 ackResult{text,kind}
+		//   - hfut 未配置 → P0 占位 ack（[识别测试] xxx 暂未真发布），等级当 success 处理
+		var res ackResult
 		if global.Hfut != nil {
-			ack = dispatchActionToHfut(ctx, key, first.UserCard, snap, a)
+			res = dispatchActionToHfut(ctx, key, first.UserCard, snap, a)
 		} else {
-			ack = buildAckMessage(a)
+			// 占位 ack 在 verbose 下也只是给开发看，按 fail 处理——这样 normal 模式
+			// 跑没接 hfut 的 bot 会保持完全静默（也是合理的）
+			res = ackResult{Text: buildAckMessage(a), Kind: ackKindFail}
 		}
-		if ack == "" {
-			// "" 表示完全静默——典型场景是群没在 schools.qq_groups 注册过，
-			// 不该让群里看到任何 bot 的提示。
+
+		// 按 verbosity 决定要不要真发到群里
+		verbose := conf.Cfg.Group.IsAutoReplyVerbose()
+		if !res.shouldEmit(verbose) {
+			zaplog.Logger.Infof("autoReply ack 抑制 group=%d user=%d kind=%d verbose=%v text=%q",
+				key.GroupID, key.UserID, res.Kind, verbose, truncateForLog(res.Text, 100))
 			continue
 		}
-		zaplog.Logger.Infof("autoReply ack → group=%d user=%d: %s", key.GroupID, key.UserID, truncateForLog(ack, 200))
-		_ = SendGroupAtText(httpClient, key.GroupID, key.UserID, ack)
+		zaplog.Logger.Infof("autoReply ack → group=%d user=%d kind=%d: %s",
+			key.GroupID, key.UserID, res.Kind, truncateForLog(res.Text, 200))
+		_ = SendGroupAtText(httpClient, key.GroupID, key.UserID, res.Text)
 	}
 }
 
