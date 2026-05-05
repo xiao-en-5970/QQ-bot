@@ -6,7 +6,7 @@
 //   - 不走 read_skill（system prompt 里把规则讲清楚就行，再多查一次 skill 浪费 token + 增加漂的概率）
 //   - Temperature 调低（识别要稳定，不要发散）
 //
-// 设计文档：skill/bot/SKILL.md 的"业务动作识别"段。
+// 设计文档：skill/bot/SKILL.md 的"5 类业务动作"段 + skill/bot/recognition.md "Kimi prompt hard rules"。
 package kimi
 
 import (

@@ -28,19 +28,26 @@ func init() {
 			Type: moonshot.ChatCompletionsToolTypeFunction,
 			Function: &moonshot.ChatCompletionsToolFunction{
 				Name: "read_skill",
-				Description: `读取 bot 内置 skill 文档（progressive disclosure）。
+				Description: `读取 bot 内置 skill 文档（progressive disclosure / 渐进式披露）。
 
-skill 文档按层级组织：
-  - 最顶层 SKILL.md：列出所有可用 skill 入口
-  - bot/SKILL.md：bot 自身能力 + 行为约束 + 自动回复策略 + 工具集说明（运行时主要看这一份）
+skill 文档按层级 + 主题分文件，避免一次塞爆上下文：
 
-调用建议：
-1. 群里被触发、不熟悉 bot 边界 → read_skill(path="bot/SKILL.md")
-2. 不知道有哪些 skill 可用 → read_skill(path="") 看顶层索引
+  - "" (留空) → skill/SKILL.md 顶层索引：列出所有可用 skill
+  - "bot/SKILL.md" → bot 自身能力 + 5 类业务动作 + 工具速查 + 自我约束（运行时主要看这一份）
+  - 真需要细节时再按主题展开：
+      * bot/recognition.md   — 窗口聚合 / 消歧 / 商品去重 / 图片转存 / Kimi prompt hard rules
+      * bot/account-model.md — 主账号↔QQ 旗下号 / 接收人重定向 / 账号集 / 学校归属
+      * bot/orphan.md        — 孤儿旗下号特殊行为（转发回群 / 请求下架）
+      * bot/qq-bind.md       — QQ 绑定 / 解绑 / 加急通路 / 错码锁 / 错误回执
+      * bot/verbosity.md     — 自动回复 verbose / normal 模式
+      * bot/phases.md        — P0~P3 实施分期归档（开发者回顾）
 
-参数 path 留空 = 顶层索引；非空 = skill 目录下的相对路径，例如 "bot/SKILL.md"。
+⚠️ Progressive Disclosure 原则：每次 read_skill 都消耗 token 和注意力。
+  - 普通会话 → 读 bot/SKILL.md 已经够，不要"以防万一"把 bot/ 全读完
+  - 真遇到子主题（如用户问加急 / 绑定锁定 / 孤儿商品）再按需展开对应 .md
+  - 不知道该读哪个 → 回头看 bot/SKILL.md 的"分文件结构"索引表
 
-⚠️ 路径白名单：仅允许 "" / "SKILL.md" / "bot" 子树（如 "bot/SKILL.md"）。
+⚠️ 路径白名单：仅允许 "" / "SKILL.md" / "bot/**"（如 "bot/qq-bind.md"）。
 其它路径（如 hfut-union/）会被工具拒绝——业务能力必须经过 bot 工具集
 （publish_good / off_shelf / publish_question 等）封装调用，
 不要让模型直接生成 HTTP 调用、不要让模型读 hfut-union 那套 API 文档。`,
@@ -49,7 +56,7 @@ skill 文档按层级组织：
 					Properties: map[string]*moonshot.ChatCompletionsToolFunctionProperties{
 						"path": {
 							Type:        "string",
-							Description: "skill 目录下的相对路径，如 'hfut-union/SKILL.md' / 'hfut-union/post/SKILL.md' / 'bot/SKILL.md'。留空 = 读顶层索引（hfut-union/SKILL.md）",
+							Description: "skill 目录下的相对路径。运行时常用：'' (顶层索引) / 'bot/SKILL.md' (主入口) / 'bot/recognition.md' / 'bot/account-model.md' / 'bot/orphan.md' / 'bot/qq-bind.md' / 'bot/verbosity.md' / 'bot/phases.md'。",
 						},
 					},
 					// path 不必填，留空就读顶层索引
