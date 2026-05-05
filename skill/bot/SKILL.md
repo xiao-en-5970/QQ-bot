@@ -170,13 +170,21 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 
 ## 临时账号 / 旗下账号 概念（hfut 后端配套设计，bot 间接依赖）
 
-### 旗下账号是什么
+### 旗下账号 ≠ 真账号——它是"发布渠道标签"
 
-不是"临时账号融合"——而是**主账号永远关联一个 QQ 子账号**：
+**核心设计哲学（P2b 阶段澄清）**：QQ 旗下账号**不是真正的账号**，而是给"通过 QQ 渠道发布"打的标签。它持有：
+- 自己发布过的资源（goods.user_id / articles.user_id 指向旗下号 ID）——保留"是谁发的"语义
+- 自己的学校归属（旗下号能不能在某学校群里发东西的依据）
+
+它**不持有**：
+- inbox / 通知（`notification.user_id` 重定向到主账号）
+- 对话 / 私信（私信功能未实现；将来如有，接收人也直接是主账号）
+- 任何"被动接收"语义
 
 ```
 主账号 (account_type=normal, parent_user_id=null)
   └── QQ 旗下账号 (account_type=qq_child, parent_user_id=主账号ID, qq_number=xxx)
+       ↑ 仅作"发布身份"，所有 inbound 重定向到 parent
 ```
 
 **关键约束**：
@@ -184,6 +192,54 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 - 用户名 `qq{qq号}`，昵称 `【QQ】{QQ群名片}`（实时跟群名片同步）
 - **严格 1:1**：一个主账号最多 1 个 QQ 旗下账号；要绑第 2 个 QQ 必须先解绑当前 QQ
 - bot 运行时所有写操作都是以 QQ 旗下账号身份做的（`user_id` 是子账号 ID）
+
+### bot 的权限边界（**严格收窄**）
+
+bot 只负责"通过 QQ 触发的发布操作"——5 种：
+
+| 动作 | 类型 |
+|---|---|
+| `publish_good` | 上架商品（旗下号身份） |
+| `publish_question` | 发提问（旗下号身份） |
+| `publish_answer` | 写回答（旗下号身份） |
+| `off_shelf` | 下架自己挂的商品（"已售/已找到"语义） |
+| `close_question` | 关闭自己挂的提问（"问题已解决"语义） |
+
+bot **不**负责的事：
+- ❌ 评论别人 / 点赞 / 收藏：纯 app 内交互，不该由 QQ 触发
+- ❌ 主动给别人发 QQ 私聊：只在群消息触发时回执（防 abuse）
+- ❌ 在群里"代主账号回复"：app 内交互不重新出口到 QQ
+- ❌ 跨用户操作他人资源：旗下号只能管自己挂的商品/提问，bot 工具集严格按调用方鉴权
+
+### 接收人重定向（核心机制，P2b 实施）
+
+任何"指向某 user_id 的被动接收"都通过 `service.ResolveTargetUserID(target)` 做转换：
+
+| target | 重定向后 |
+|---|---|
+| 普通账号 | 不变 |
+| 非孤儿 QQ 旗下号 | → `parent_user_id`（主账号） |
+| 孤儿 QQ 旗下号 | 不变（保持指向孤儿；P2c 阶段 bot 转发回 QQ 群） |
+| 不存在 / 已禁用 | 不变（让上层校验拦掉） |
+
+应用点（已实现）：
+- `service.notificationService.emit / emitAggregatedLike` —— **单点改造覆盖全部 4 类通知**：点赞文章 / 点赞评论 / 顶层评论 / 回复评论。所有通知 `user_id`（接收人）入库前自动重定向。
+- 商品 / 文章的 owner 资源校验：通过 P2b 的"账号集"模型解决（caller 是主账号时能动旗下号的资源）。
+
+效果：
+- 别人评论旗下号的提问 → 主账号在 app 通知里看到"X 评论了你的提问"（不需要查询时聚合）
+- 别人点赞旗下号的商品 → 主账号在 app 收到通知
+- 主账号在 app 里点击通知 → 进入提问/商品页 → 用主账号身份回复（不再涉及旗下号）
+
+### 作者展示：username（来自用户 xxx）
+
+`vo.AuthorProfile` 新增 `from_user_id` + `from_username`——非孤儿 QQ 旗下号作为作者时填充主账号信息。前端按需拼成形如：
+
+> **【QQ】小张**（来自用户 _xiao_zhang_）
+
+让别人看到这条内容是**主账号 xiao_zhang 通过 QQ 渠道发的**，身份不会丢失。已应用到：文章列表 / 单篇 / 评论 / 商品 4 处 enrich。
+
+孤儿旗下号没有 from_*——前端展示就是干净的"【QQ】小张"，无主账号关联。
 
 ### 创建 / 挂载 / 解绑时机
 
@@ -217,12 +273,32 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 - 旗下账号本质上是"不严格"的身份，所以它能做的事被刻意限制（仅 bot 触发的写操作、不能登录、聊天受限等——见下文"孤儿账号特殊行为"）
 - 旗下账号**只能在自身学校支持的群里**通过 bot 上架——主账号是合工大，那这个旗下号只在合工大白名单的群里有效，跨学校的群即便消息能进来也会被 bot 工具集鉴权拒绝
 
-### 数据聚合 / 操作权限
+### 数据聚合 / 操作权限（P2b 已实现）
 
-- 主账号的 app 列表（"我的商品" / "我的订单" / 通知）= 主账号自己 + 旗下账号的数据**合并展示**，旗下账号那部分加 tag "来自 QQ"
-- 主账号**可以读写**旗下账号全部数据（改、删、回复消息等）
-- 主账号 app 内"个人主页"加入口：**进入你的 QQ 智能体** → 进旗下账号空间，**界面受限（只读为主）**
+两个核心抽象：
+
+1. **`service.GetAccountIDsForOps(callerID) → AccountIDSet{Caller, ChildID, AllIDs}`**
+   caller 在做"我的"操作时能 access 的所有 user_id 集合（= 主账号 + 旗下账号）。
+   用于：列表查询合并 + 资源 owner 校验放宽到"账号集"。
+
+2. **`service.ResolveTargetUserID(targetUserID) → uint`**
+   接收人重定向：非孤儿旗下号 → parent_user_id；其它原样。
+   用于：通知 emit 入库前——所有 inbound 落到主账号身上。
+
+应用：
+
+- **列表合并展示**："我的商品" / "我的提问/帖子/回答" / "我的草稿" / "我的买卖订单" / "我的通知" 等列表，caller 看自己时把主账号 + 旗下号的内容**合并按时间倒序**返回
+- **写权限对称**：主账号能改/删/上下架/确认收款发货 caller 集合里**任一账号**的资源（商品/文章/订单状态机的 owner 校验全部走 `IsOwnedByOneOf`）
+- **接收人重定向**：通知（点赞/评论/回复/官方）入库前重定向，DB 里 `user_id` 直接是主账号 id——查询不需要再聚合，自动正确
+- **作者展示带"来自用户 xxx"**：`AuthorProfile.from_user_id/from_username` 让前端拼"username（来自用户 xxx）"
+- **数据聚合契约**：`/user/info` 响应里返回 `qq_child_user_id` + `qq_child_qq_number`
+- **看别人 vs 看自己**：看别人的列表时**不**聚合（看不到别人的旗下号资源），看自己时才合并
 - 不允许主账号操控 bot 主动发 QQ 消息（防 abuse；bot 自己只在群消息触发时回执）
+
+#### "账号集"权限模型的安全保险
+
+- caller 自己是旗下账号（理论上 password 空登录不进来）→ `GetAccountIDsForOps` 只返回它自己，**不**递归向上找 parent——即便 admin 直接 SQL 改密码让旗下号能登录，攻击者也拿不到 parent 的资源
+- caller 没绑 QQ 旗下账号 → 集合只有 caller 本人，所有 IN 查询退化为单 user_id 等值，行为跟改造前一致
 - **"QQ 加急"功能**（P3 排期）：商品聊天界面**长按聊天气泡 → 弹出菜单 → 选"加急" → bot 把这条聊天发给对方 QQ 私聊**。
   - 前端 UI：被加急的气泡渲染成**红色** + 标注"加急"标识（让发送人和接收人都看到）
   - 后端：长按"加急"后调 hfut 接口（如 `POST /api/v1/orders/:id/messages/:msg_id/urge`），hfut 反查接收人 → 调 bot 内部 API → bot 发 QQ 私聊
@@ -444,15 +520,31 @@ group:
 - ✅ 学校归属覆盖（挂载时主账号 school_id 强覆盖旗下账号）
 - ✅ 解绑保留数据（parent_user_id 设回 NULL，旗下账号变孤儿，所有商品/提问保留）
 
-### P2b（鉴权改造 + 数据聚合，**下一次开干**）
+### P2b（鉴权改造 + 数据聚合 + 接收人重定向）
 
-- 鉴权改造：主账号能读写"自己 + 旗下账号"的资源；service 层 user_id 校验改造
-- 数据聚合："我的商品"/"我的订单"列表合并展示（旗下账号那部分 tag "来自 QQ"）
-- 主账号 app "进入你的 QQ 智能体"入口（受限只读界面）
+**写权限/读列表合并（账号集模型）**：
+- ✅ `service.GetAccountIDsForOps` —— 所有"我的"权限校验/列表查询都基于账号集
+- ✅ 商品（`UpdateGood/Publish/OffShelf/UploadImages`）+ 文章（`UpdateArticle/Delete/UploadImages/PublishDraft`）owner 校验放宽到"账号集"
+- ✅ `resolveOrderParticipant` 改账号集判定——所有订单状态机操作一次性适配
+- ✅ "我的商品/提问/草稿/订单/通知" 列表 caller 看自己时聚合主账号+旗下号
 
-### P2c（孤儿账号回复转发，**P2b 之后**）
+**接收人重定向（旗下号是"发布渠道标签"）**：
+- ✅ `service.ResolveTargetUserID` —— 非孤儿旗下号 → parent
+- ✅ `notification.emit/emitAggregatedLike` 入库前重定向：所有点赞/评论/回复/官方通知自动落到主账号身上
 
-- 孤儿提问被 app 用户回复 → bot 在原群里 @ 那个 QQ 转发"来自 app 用户 X 的回答"
+**展示契约**：
+- ✅ `/user/info` 返回 `qq_child_user_id` + `qq_child_qq_number`
+- ✅ `AuthorProfile` 加 `from_user_id` + `from_username`，前端拼 "username（来自用户 xxx）"
+
+bot 权限**严格收窄**到 5 类发布动作（publish_good / question / answer / off_shelf / close_question），所有 app 内交互（评论/点赞/聊天）都走 app，不走 QQ。
+
+### P2c（孤儿账号回复转发，**P2b 之后**——范围因 P2b 重定向而缩小）
+
+由于 P2b 的接收人重定向，**绑定了主账号的旗下号** 已经不需要 P2c：app 用户回复 → 通知主账号 → 主账号在 app 直接处理。
+
+P2c 只剩**孤儿旗下号**的特殊场景：
+
+- 孤儿提问被 app 用户回复 → bot 在原群里 @ 那个 QQ 转发"来自 app 用户 X 的回答"（因为孤儿没主账号接管）
 - 孤儿商品的"联系卖家"按钮：不开聊天，弹"通过 QQ 联系：QQ-12345678"告示 + "请求下架"按钮
 - "请求下架"触发 bot 在群里 @ 卖家："你的商品 XX 是不是已出？回'是'就下架"
 
