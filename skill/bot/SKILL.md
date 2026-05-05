@@ -548,15 +548,28 @@ group:
 
 bot 权限**严格收窄**到 5 类发布动作（publish_good / question / answer / off_shelf / close_question），所有 app 内交互（评论/点赞/聊天）都走 app，不走 QQ。
 
-### P2c（孤儿账号回复转发，**P2b 之后**——范围因 P2b 重定向而缩小）
+### P2c（孤儿账号回复转发 + 请求下架）
 
-由于 P2b 的接收人重定向，**绑定了主账号的旗下号** 已经不需要 P2c：app 用户回复 → 通知主账号 → 主账号在 app 直接处理。
+由于 P2b 的接收人重定向，**绑定了主账号的旗下号** 已经不需要 P2c：app 用户回复 → 通知主账号 → 主账号在 app 直接处理。P2c 只剩**孤儿旗下号**特殊场景：
 
-P2c 只剩**孤儿旗下号**的特殊场景：
+- ✅ **创建群持久化**：`users` 加 `created_in_group_id` 字段（详见 `package/sql/migrate_qq_child_orphan_group.sql`）；`BotUpsertQQChild` 创建旗下号时填，`first-seen` 群作为孤儿转发回的目标群
+- ✅ **孤儿 inbound 通知转发**：`notification.dispatchInbound` 用 `ResolveInboundTarget` 分流——
+  - **InboundNormal** 普通账号 → 入库
+  - **InboundBoundChild** 已绑旗下号 → 重定向 parent 后入库（P2b）
+  - **InboundOrphan** 孤儿旗下号 → 不入库，调 bot.SendGroup 转发到 `created_in_group_id` 群里 @ 该 QQ；文案区分 4 类（点赞文章/点赞评论/评论/回复评论）+ 官方通知
+  - **InboundInvalid** 静默丢弃
+- ✅ **孤儿商品 VO**：GET /goods/:id 及列表条目在 owner 是孤儿时返回 `is_orphan_owner: true` + `seller_qq_number: "12345678"`，前端用来切换"联系卖家"按钮：
+  - 不是孤儿 → 正常聊天入口
+  - 是孤儿 → 弹"通过 QQ 联系：QQ-XXX"告示 + "请求下架"按钮
+- ✅ **请求下架**：`POST /api/v1/goods/:id/request-off-shelf` —— bot 在原群里 @ 卖家"是不是已出？回'是'就下架"。失败时清限流锁让用户能重试；同 (caller, good) 1h 内只能请求一次防刷
+- 卖家在 QQ 群里回 "是 / 已出 / 鞋架已出" 等 → 走现有 `off_shelf` 识别链路自动下架（不需要新逻辑）
 
-- 孤儿提问被 app 用户回复 → bot 在原群里 @ 那个 QQ 转发"来自 app 用户 X 的回答"（因为孤儿没主账号接管）
-- 孤儿商品的"联系卖家"按钮：不开聊天，弹"通过 QQ 联系：QQ-12345678"告示 + "请求下架"按钮
-- "请求下架"触发 bot 在群里 @ 卖家："你的商品 XX 是不是已出？回'是'就下架"
+#### P2c 边界 & 回退
+
+- **存量孤儿没 `created_in_group_id`**：迁移前的孤儿 inbound 通知会被静默 drop + log info（不报错）；新创建的旗下号自动填字段不受影响
+- **bot 服务不可达**：转发失败仅 log warn，主接口（评论/点赞）仍然成功；用户在 QQ 没收到只是错过一次回复，数据不会错乱
+- **请求下架 1h 内同一 caller 同一 good 只允许 1 次**：防 app 用户骚扰卖家
+- 孤儿绑回主账号后历史 inbound 自动正常（`ResolveInboundTarget` 下次返 `InboundBoundChild` 走 P2b 路径）
 
 ### P3（精度优化 + 边缘）
 
