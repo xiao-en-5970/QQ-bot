@@ -306,11 +306,14 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
   - `POST /internal/qq/send-group`   body `{group_id, qq_number?, text}` → `{status: "ok"}`（qq_number=0 时发纯文本群消息，否则 @ 该用户）
   - `GET  /internal/healthz`（不需要 token，给 docker compose healthcheck 用）
 
-#### hfut 端：3 个 RESTful 端点（`controller/qq_bind.go`，走 user JWT）
+#### hfut 端：4 个 RESTful 端点（`controller/qq_bind.go`，走 user JWT）
 
-- `POST /api/v1/user/qq-bind/request-code` body `{qq_number}` → `{ttl_seconds: 300}`
+绑定 / 解绑**都走 request-code → confirm 两步**，对称设计——解绑也要 QQ 端能收到验证码才能成功，防主账号 token 被盗后攻击者"解绑别人 + 自己重新绑 + 盗取旗下账号数据"的攻击向量。
+
+- `POST /api/v1/user/qq-bind/request-code` body `{qq_number}` → `{ttl_seconds: 300}`（hfut 调 bot CheckFriend → 是好友再发码）
 - `POST /api/v1/user/qq-bind/confirm`      body `{qq_number, code}` → 200/400
-- `POST /api/v1/user/qq-unbind`            无 body → 200/400
+- `POST /api/v1/user/qq-unbind/request-code` 无 body（自动取当前绑定的 QQ）→ `{ttl_seconds: 300}`
+- `POST /api/v1/user/qq-unbind/confirm`      body `{code}` → 200/400
 
 校验顺序（每个写入端点都走）：
 1. 主账号是 `account_type=normal` 且 `school_id != 0`（先绑学校再绑 QQ）
@@ -321,7 +324,11 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 
 确认时校验 redis：code + requesting_user_id 匹配；命中 → tx 内挂载（找现有孤儿旗下账号 → 设 parent_user_id + 用主账号 school_id 覆盖；找不到 → 创建空旗下账号直接挂上）。tx commit 后删 redis code。
 
-解绑：把当前主账号下的旗下账号 `parent_user_id` 设回 NULL，**不删任何数据**——旗下账号的商品 / 提问继续存在但变孤儿。
+解绑：跟绑定对称的两步走——`request-code` 阶段从主账号查出当前绑定的 QQ，调 bot 给那个 QQ 发"解绑确认验证码"私聊；`confirm` 阶段校验 code 后真把 `parent_user_id` 设回 NULL，**不删任何数据**——旗下账号的商品 / 提问继续存在但变孤儿。
+
+解绑文案故意区别于绑定（"您正在**解除**当前 QQ 与 app 账号的绑定" + "如非本人操作请忽略此消息——可能是你的 app 账号被盗"），让用户清楚操作意图、能识别异常。
+
+解绑限流跟绑定**独立**（不同 redis key 前缀 `qq_unbind_throttle:` / `qq_bind_throttle:`）——避免用户绑定刚撞限流就也走不了解绑这种死锁。
 
 ### 限流
 
