@@ -110,7 +110,25 @@ func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *mod
 	if maxSize <= 0 {
 		maxSize = 20
 	}
-	if len(b.Msgs) >= maxSize {
+	shouldFlush := len(b.Msgs) >= maxSize
+
+	// P3.2：消歧的"立刻 flush"路径。
+	//
+	// 用户在 1min 内回单字数字选择（"1"/"2"/"①"），桶里又只有这一条，就跳过
+	// 5s~60s 的 silence 窗口，立刻 flush 让消歧响应秒回——选择题等 60s 才回是
+	// 反人类的体验。
+	//
+	// 注意：消歧状态在 processSnapshot 那一层才会被消费 / 清掉；这里只是"看到
+	// 状态在 + 当前消息是数字"就触发 flush，正确性由 processSnapshot 的 disambig
+	// take + TTL 共同保证。
+	if !shouldFlush && len(b.Msgs) == 1 {
+		flat := strings.TrimSpace(b.Msgs[0].FlatText)
+		if disambigChoiceFromText(flat) > 0 && disambigMgr.Get(key) != nil {
+			shouldFlush = true
+		}
+	}
+
+	if shouldFlush {
 		// 单独抽出快照、清空桶、起 goroutine 处理；保持 Push 是 O(1) 不阻塞 wsclient
 		snapshot := b.Msgs
 		b.Msgs = nil
@@ -174,6 +192,34 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 	for i, msg := range snap {
 		zaplog.Logger.Infof("  [%d] msgid=%d %s | %s",
 			i+1, msg.MessageID, msg.Time.Format("15:04:05"), truncateForLog(msg.FlatText, 200))
+	}
+
+	// P3.2：消歧选择消费——如果当前 (group, user) 有 pending disambig 上下文，
+	// 且**整段窗口里的所有消息**都是单字数字选择（"1"/"2"/"①"），就直接处理选择
+	// 而不送 Kimi。同窗口里夹了别的话题（"1 还有这个鞋架也卖 5 块"）就忽略消歧、
+	// 走正常识别路径，让 Kimi 处理新意图。
+	//
+	// 这里读上下文用 Get（不删）——只有真正消费完 hfut 调用后再 Take/Clear；
+	// 避免"网络抖动 → choice 失败 → 状态丢" 让用户没法重试。但实测中失败也不该
+	// 让用户多按一次（设计上消歧是一次性的），所以失败时也 Take。
+	if pending := disambigMgr.Get(key); pending != nil {
+		if choice := windowAsDisambigChoice(snap); choice > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			httpClient := client_pool.NewClientPool()
+			c := disambigMgr.Take(key) // 消费即删
+			res := dispatchDisambigChoice(ctx, c, choice)
+			verbose := conf.Cfg.Group.IsAutoReplyVerbose()
+			if res.shouldEmit(verbose) {
+				zaplog.Logger.Infof("autoReply 消歧 ack → group=%d user=%d kind=%d: %s",
+					key.GroupID, key.UserID, res.Kind, truncateForLog(res.Text, 200))
+				_ = SendGroupAtText(httpClient, key.GroupID, key.UserID, res.Text)
+			}
+			return
+		}
+		// 窗口里不是单纯的数字选择 = 用户改话题了，放弃消歧（让 TTL 自然过期也行，
+		// 这里显式 Clear 避免污染下次窗口）
+		disambigMgr.Clear(key)
 	}
 
 	if global.Kimi == nil {
@@ -327,6 +373,22 @@ func buildAckMessage(a kimi.RecognizeAction) string {
 	default:
 		return ""
 	}
+}
+
+// windowAsDisambigChoice 检查整段窗口是否仅是"用户的一次消歧选择"——返回 1-based
+// index，0 表示不是消歧选择（应当走正常识别路径）。
+//
+// 规则：
+//   - 必须只有 1 条消息（多条 → 用户在窗口里讲了别的话题，不算消歧）
+//   - 该消息的 FlatText 必须能被 disambigChoiceFromText 解析为 1~5
+//
+// 调用方应当**先**确认 disambigMgr.Get(key) != nil（有 pending 上下文）才调本函数；
+// 否则单独发"1"会被误识别。
+func windowAsDisambigChoice(snap []autoReplyMsg) int {
+	if len(snap) != 1 {
+		return 0
+	}
+	return disambigChoiceFromText(snap[0].FlatText)
 }
 
 func orPlaceholder(s, fallback string) string {

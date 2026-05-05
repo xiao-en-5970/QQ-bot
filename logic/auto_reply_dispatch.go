@@ -82,7 +82,21 @@ func dispatchActionToHfut(
 	snap []autoReplyMsg,
 	action kimi.RecognizeAction,
 ) ackResult {
-	// 第 1 步：upsert 旗下账号——所有写操作都需要 user_id。
+	// 第 1 步：限流（P3.4）——仅对会"落库 / 改状态"的动作生效。
+	// 反问类（off_shelf 多候选 / close_question 多候选）落到这里其实只是"反问 + 等回应"，
+	// 也算一次 dispatch，但这一类不计数（避免用户被反问后立刻又触发限流）。
+	if isMutatingAction(action.Type) {
+		if ok, retry := dispatchLimiter.Allow(key); !ok {
+			zaplog.Logger.Warnf("autoReply 限流命中 group=%d user=%d type=%s retry=%s",
+				key.GroupID, key.UserID, action.Type, retry)
+			return ackResult{
+				Text: fmt.Sprintf("发布太频繁，请 %ds 后再来", int(retry.Seconds())),
+				Kind: ackKindAskUser,
+			}
+		}
+	}
+
+	// 第 2 步：upsert 旗下账号——所有写操作都需要 user_id。
 	upsert, err := global.Hfut.UpsertQQChild(ctx, qqNumberOf(key.UserID), key.GroupID, userCard)
 	if err != nil {
 		// 群没配学校 → 完全静默（按 SKILL.md 设计）
@@ -99,7 +113,7 @@ func dispatchActionToHfut(
 			key.GroupID, key.UserID, upsert.UserID, upsert.SchoolID)
 	}
 
-	// 第 2 步：按 action.Type 分流到具体 hfut 调用。
+	// 第 3 步：按 action.Type 分流到具体 hfut 调用。
 	switch action.Type {
 	case "publish_good":
 		return dispatchPublishGood(ctx, upsert.UserID, snap, action)
@@ -108,13 +122,22 @@ func dispatchActionToHfut(
 	case "publish_answer":
 		return dispatchPublishAnswer(ctx, key.GroupID, upsert.UserID, action)
 	case "off_shelf":
-		return dispatchOffShelf(ctx, upsert.UserID, action)
+		return dispatchOffShelf(ctx, key, upsert.UserID, action)
 	case "close_question":
-		return dispatchCloseQuestion(ctx, key.GroupID, upsert.UserID, action)
+		return dispatchCloseQuestion(ctx, key, upsert.UserID, action)
 	default:
 		// 未知 type 不该走到这里（processSnapshot 那边已经过滤过 none）
 		return ackResult{Kind: ackKindIgnore}
 	}
+}
+
+// isMutatingAction 判定一个 action 是否会"真改 hfut 状态"——只有这些才计数限流。
+func isMutatingAction(actionType string) bool {
+	switch actionType {
+	case "publish_good", "publish_question", "publish_answer":
+		return true
+	}
+	return false
 }
 
 // qqNumberOf 把 NapCat 的 user_id（int64）转成 qq_number 字符串，
@@ -430,11 +453,11 @@ func dispatchPublishAnswer(ctx context.Context, groupID int64, userID uint, a ki
 	}
 }
 
-func dispatchCloseQuestion(ctx context.Context, groupID int64, userID uint, a kimi.RecognizeAction) ackResult {
+func dispatchCloseQuestion(ctx context.Context, key autoReplyBucketKey, userID uint, a kimi.RecognizeAction) ackResult {
 	hint := strings.TrimSpace(a.CloseQuestionHint)
-	openQs, err := global.Hfut.ListOpenQuestions(ctx, groupID, 20)
+	openQs, err := global.Hfut.ListOpenQuestions(ctx, key.GroupID, 20)
 	if err != nil {
-		zaplog.Logger.Errorf("autoReply ListOpenQuestions(close) 失败 group=%d: %v", groupID, err)
+		zaplog.Logger.Errorf("autoReply ListOpenQuestions(close) 失败 group=%d: %v", key.GroupID, err)
 		return ackResult{Text: "已识别到你想关闭提问，但同步到 app 失败了，稍后再试", Kind: ackKindFail}
 	}
 	// 只考虑这个 user 自己发布的提问；筛出后再匹配 hint
@@ -449,13 +472,21 @@ func dispatchCloseQuestion(ctx context.Context, groupID int64, userID uint, a ki
 		target = matchQuestion(mine, hint)
 	}
 	if target == nil {
-		// 多个开放提问 + 用户没指明 → 反问
-		var titles []string
+		// P3.2：多个开放提问 + 用户没指明 → 存消歧上下文 + 编号反问。
+		// 用户后续在 1 分钟内回 "1"/"2"/"①"/"②"，processSnapshot 会跳过 Kimi 直接走
+		// dispatchDisambigChoice 完成关闭。
+		candidates := make([]disambigCandidate, 0, len(mine))
 		for _, q := range mine {
-			titles = append(titles, "「"+q.Title+"」")
+			candidates = append(candidates, disambigCandidate{ID: q.ID, Title: q.Title})
 		}
+		disambigMgr.Save(key, &disambigContext{
+			Kind:       disambigKindCloseQuestion,
+			UserID:     userID,
+			GroupID:    key.GroupID,
+			Candidates: candidates,
+		})
 		return ackResult{
-			Text: fmt.Sprintf("你最近在挂这几条提问：%s，请明确说要关闭哪一条", strings.Join(titles, "、")),
+			Text: "要关闭哪一条？回 1/2/3 即可：\n" + formatNumberedCandidates(candidates),
 			Kind: ackKindAskUser,
 		}
 	}
@@ -473,7 +504,7 @@ func dispatchCloseQuestion(ctx context.Context, groupID int64, userID uint, a ki
 // off_shelf — 下架商品
 // =============================================================================
 
-func dispatchOffShelf(ctx context.Context, userID uint, a kimi.RecognizeAction) ackResult {
+func dispatchOffShelf(ctx context.Context, key autoReplyBucketKey, userID uint, a kimi.RecognizeAction) ackResult {
 	hint := strings.TrimSpace(a.OffShelfHint)
 	goods, err := global.Hfut.ListActiveGoods(ctx, userID, 20)
 	if err != nil {
@@ -491,12 +522,19 @@ func dispatchOffShelf(ctx context.Context, userID uint, a kimi.RecognizeAction) 
 		target = matchGood(goods, hint)
 	}
 	if target == nil {
-		var titles []string
+		// P3.2：多个在售 + 用户没指明 → 存消歧上下文 + 编号反问。
+		candidates := make([]disambigCandidate, 0, len(goods))
 		for _, g := range goods {
-			titles = append(titles, "「"+g.Title+"」")
+			candidates = append(candidates, disambigCandidate{ID: g.ID, Title: g.Title})
 		}
+		disambigMgr.Save(key, &disambigContext{
+			Kind:       disambigKindOffShelf,
+			UserID:     userID,
+			GroupID:    key.GroupID,
+			Candidates: candidates,
+		})
 		return ackResult{
-			Text: fmt.Sprintf("你最近在挂这几件：%s，请明确说要下架哪一个", strings.Join(titles, "、")),
+			Text: "要下架哪一件？回 1/2/3 即可：\n" + formatNumberedCandidates(candidates),
 			Kind: ackKindAskUser,
 		}
 	}
@@ -508,6 +546,74 @@ func dispatchOffShelf(ctx context.Context, userID uint, a kimi.RecognizeAction) 
 		}
 	}
 	return ackResult{Text: fmt.Sprintf("已为你下架「%s」", target.Title), Kind: ackKindSuccess}
+}
+
+// formatNumberedCandidates 把候选列表格式化成 "1. 标题 / 2. 标题" 多行文本。
+//
+// 单独抽出来：off_shelf 和 close_question 共用，避免文案不一致。
+// 上限 5 条——用户在 QQ 群消息里看 5 条已经接近视觉上限，更多会被截断；
+// 现实里同一卖家挂 5 件以上也极少见。超过 5 条只展示前 5 条 + 省略号提示。
+func formatNumberedCandidates(cands []disambigCandidate) string {
+	const maxShow = 5
+	n := len(cands)
+	if n > maxShow {
+		n = maxShow
+	}
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "%d. %s", i+1, cands[i].Title)
+	}
+	if len(cands) > maxShow {
+		fmt.Fprintf(&b, "\n…(共 %d 条，显示前 %d)", len(cands), maxShow)
+	}
+	return b.String()
+}
+
+// dispatchDisambigChoice 处理用户选了第 choice 个候选——按 disambig 上下文里
+// 的 Kind 走对应的真"下架"/"关闭提问" 调用。
+//
+// choice 是 1-based；调用方应当先用 disambigChoiceFromText 验证过。
+//
+// 失败处理：候选越界 / hfut 调用失败均返回相应 ack；不会再二次反问让用户重选——
+// 用户回错就让他重新发一句明确的话题。
+func dispatchDisambigChoice(ctx context.Context, c *disambigContext, choice int) ackResult {
+	if c == nil || choice < 1 || choice > len(c.Candidates) {
+		return ackResult{
+			Text: fmt.Sprintf("没找到你说的第 %d 条，请重新发一句明确的", choice),
+			Kind: ackKindAskUser,
+		}
+	}
+	cand := c.Candidates[choice-1]
+	switch c.Kind {
+	case disambigKindOffShelf:
+		if err := global.Hfut.OffShelfGood(ctx, cand.ID, c.UserID); err != nil {
+			zaplog.Logger.Errorf("autoReply 消歧→OffShelfGood 失败 good=%d: %v", cand.ID, err)
+			return ackResult{
+				Text: fmt.Sprintf("识别到你选第 %d 条「%s」，但同步到 app 失败了，稍后再试", choice, cand.Title),
+				Kind: ackKindFail,
+			}
+		}
+		return ackResult{
+			Text: fmt.Sprintf("已为你下架「%s」", cand.Title),
+			Kind: ackKindSuccess,
+		}
+	case disambigKindCloseQuestion:
+		if err := global.Hfut.CloseArticle(ctx, cand.ID, c.UserID); err != nil {
+			zaplog.Logger.Errorf("autoReply 消歧→CloseArticle 失败 article=%d: %v", cand.ID, err)
+			return ackResult{
+				Text: fmt.Sprintf("识别到你选第 %d 条「%s」，但同步到 app 失败了，稍后再试", choice, cand.Title),
+				Kind: ackKindFail,
+			}
+		}
+		return ackResult{
+			Text: fmt.Sprintf("已为你关闭提问「%s」", cand.Title),
+			Kind: ackKindSuccess,
+		}
+	}
+	return ackResult{Kind: ackKindIgnore}
 }
 
 // =============================================================================

@@ -604,42 +604,85 @@ bot 权限**严格收窄**到 5 类发布动作（publish_good / question / answ
 
 未来如果新增页面 / 状态：保持上述风格——**标题动词化**、**副文案 ≤14 汉字**、**不出现"请"开头的祈使长句**、**避免"将...转..."这种 RPC 化口吻**。
 
-#### P3.2 多在售时反问消歧（待做）
+#### P3.2 多在售时反问消歧（已完成）
 
-场景：同一卖家在群里说"那个鞋架 5 块出了"，但 hfut 里能匹配到 ≥2 条该卖家的在售商品。当前 bot 直接挑 best match 上架/下架，存在误操作风险。
+实现位置：`QQ-bot/logic/disambig_state.go` + `auto_reply.go` + `auto_reply_dispatch.go`。
 
-设计方向：
-- bot 内部为该群当前轮维护一个"待消歧上下文"（短 TTL，1 分钟），存 `{user_qq, candidates: [good_id, title, price], action}`。
-- bot 在群里 reply：`@用户 你说的是 ① 三层鞋架 ¥6 ② 折叠桌 ¥30，回 1 / 2`。
-- 用户回 `1` / `2` / `①` 在窗口聚合内被识别为消歧选择，dispatcher 取上下文里的 action 走原流程。
-- 超时 / 用户改话题 → 上下文丢弃，bot 不主动追问。
+- bot 在 `dispatchOffShelf` / `dispatchCloseQuestion` 检测到候选 ≥ 2 + 用户没指明时，
+  调 `disambigMgr.Save(key, ctx)` 存"待消歧上下文"（`{Kind, UserID, GroupID, Candidates, CreatedAt}`，TTL = 60s）。
+- 反问文案统一通过 `formatNumberedCandidates` 输出 `1. 标题\n2. 标题\n…`（最多展示 5 条），让用户回数字即可。
+- `auto_reply.go::Push` 检测到该 (group, user) 有 pending disambig 且当前消息文本是 `1`/`2`/`①` 等单字数字 → **立刻 flush**（不等 silence），保证选择秒回。
+- `processSnapshot` 入口先看 pending 是否能消费：整段窗口都是单条数字选择 → 走 `dispatchDisambigChoice` 直接调 `OffShelfGood`/`CloseArticle`；用户改话题（窗口里有非数字消息或多条）→ `disambigMgr.Clear(key)` 后走正常 Kimi 识别。
+- TTL 过期不主动清理，靠 `Get`/`Take` 时懒过期；不引入额外 goroutine。
 
-#### P3.3 QQ 加急（待做）
+边界：
+- 单 user 同一时刻只有一份 pending 上下文（同 key 后存的覆盖前面）——避免上下文交错。
+- "1 还有这个鞋架也卖 5 块" 这种含数字 + 新意图的窗口不会被识别为消歧：`windowAsDisambigChoice` 要求 `len(snap)==1`。
+- `disambigChoiceFromText` 上限 5——同一卖家同时挂超过 5 件的概率极低；超过 5 件展示前 5 条 + 省略号。
 
-- 前端：聊天气泡长按弹菜单 → "加急" → 红色气泡 + "加急"标识
-- 后端：`order_messages` 加 `urgent` / `urged_at` 字段；hfut 加 `POST /orders/:id/messages/:msg_id/urge`；
-  通过现有 `botinternal.SendPrivate`（JWT 鉴权，与 P2b 同一通路）发到对方 QQ。
-- 限流：同一对话每 5min 最多加急 1 次；接收人未绑 QQ 且没有 `created_in_group_id` → 直接拒绝；
-  接收人是孤儿旗下号（有 `created_in_group_id`）→ 走 `botinternal.SendGroup` 转发回原群（与 P2c orphan 转发一致）。
-- 鉴权：复用 P2b 已经建立的 hfut→bot **JWT 通路**（共享 `BOT_SERVICE_JWT_SECRET`，`iss=HFUT-Graduation-Project-hfut`）。**不再引入 `BOT_INTERNAL_API_TOKEN`**。
+#### P3.3 QQ 加急（已完成 backend + frontend）
 
-#### P3.4 限流 / 错误锁定 / 审计日志（待做）
+后端：
+- 新表列：`order_messages.urgent BOOL NOT NULL DEFAULT FALSE` + `urged_at TIMESTAMPTZ NULL`（迁移：`migrate_order_message_urgent.sql`）。
+- service：`(*orderService).OrderMessageUrge(orderID, msgID, callerUserID)`，定义在 `app/service/order_urge.go`。
+  - 校验：caller 是订单参与方（账号集语义）+ msg.SenderID ∈ caller 账号集 + msg 不是 official + 未加急。
+  - 限流：同一 (order, caller) 每 5min 最多 1 次（Redis SetNX，key = `order_urge_throttle:{order_id}:{caller_id}`）。
+  - 接收人解析：`resolveRecipientQQ(userID)` 直接返回目标 QQ（int64）：
+    - 普通账号 + 绑了 QQ child → `child.qq_number`
+    - 孤儿 QQ child（本身就是 QQ 用户）→ `user.qq_number`
+    - 普通账号 + 没绑 QQ → `ErrOrderUrgeRecipientNoQQ`
+    - **不做群里 @ 兜底**——加急是私聊提醒，群发会泄露订单内容且偏离设计语义。
+  - 写入：`MarkUrgent` 用 `WHERE urgent=false` 条件 update 保证幂等；rows=0 视为并发已加急。
+  - 通知：仅调 `botinternal.SendPrivate(rctx, qq, text)`；失败 → `ErrOrderUrgeBotUnavailable`（urgent 标记 + 限流锁仍保留，代表"已尝试加急"）。
+  - 审计：成功后写一条 `MsgType=Official` 的订单消息（"已加急提醒对方查看消息（HH:mm）"），让对话双方都能看到事件。
+- controller：`OrderMessageUrge`（`/orders/:id/messages/:msg_id/urge`），错误码 400 / 403 / 404 / 409 / 429（含 `retry_after_seconds`） / 502。
+- 鉴权通路：复用 P2b 的 hfut→bot **JWT 通路**（共享 `BOT_SERVICE_JWT_SECRET`，`iss=HFUT-Graduation-Project-hfut`），**不引入** `BOT_INTERNAL_API_TOKEN`。
 
-- bot→hfut 的服务 token 调用：每次记录 `iss/sub/aud/jti/path/status` 到 `service_token_audit` 表（hfut 一侧）。
-- hfut→bot 的内部调用：bot 一侧记日志（已部分有，待结构化）。
-- QQ 绑定 / 解绑错误锁：错 5 次 → 锁 30min（P2a 暂未做的部分），落 Redis key `qq_bind_locked:{qq}` / `qq_unbind_locked:{qq}`。
-- bot 商品上架 / 问答发布：同一群同一发起人 1min 内 ≥3 次 → 加 cooldown，避免被误调用刷屏。
+前端：
+- `api/orders.ts` 加 `urgeOrderMessage(orderId, msgId)` 与 `Msg.urgent / urged_at` 字段。
+- `OrderChatScreen` 长按自己发的、未加急的气泡 → Alert 二次确认 → 调 API 后 `refreshAll` 拉回。
+- 加急徽章：气泡右上角红色"加急"小标签 + 红色描边 (`bubbleUrgent`)；图片消息和文字消息都支持。
 
-#### P3.5 Kimi prompt 再调优（待做）
+未来扩展：
+- 接收人可以配置"接受加急"开关（默认开）；屏蔽对方加急时 hfut 直接拒。
+- 加急成功后立刻把 official 消息推过 socket 通知；当前靠轮询 `MSG_POLL_MS = 3000` 也能在 3s 内看到。
 
-- 多张图 + 文字混合：当前 mirror 后传给 Kimi 的图片是有限张数，需要明确 prompt 让 Kimi 在多图时仍以文字诉求为主，避免被无关图诱导。
-- 跨窗口短上下文：用户上一条窗口没说完，下一条窗口接着说，目前每个窗口独立识别。可以在窗口聚合层加 30s 内"上一句残文"作为额外 context，但不参与识别打分（仅用作 disambiguation 辅助）。
-- 误识别样本回流：把 Kimi 误识别的 case（用户后来发"取消上架"等）记录到 `kimi_recognize_audit`，定期回看再 tune prompt。
+#### P3.4 限流 / 错误锁定 / 审计日志（已完成）
+
+bot → hfut 服务调用审计：
+- 表：`service_token_audit (id, service, jti, method, path, status_code, remote_ip, duration_ms, created_at)`，迁移见 `migrate_service_token_audit.sql`。
+- middleware：`BotServiceAuth` 在 `ctx.Next()` 后异步起 goroutine 写一行；只记**通过验签**的请求（401 已被 ZapLogger 记过）。
+- 写失败仅 log warn，不重试也不影响主流程；体量预估 ~150w 行/月，后续视情况加 30 天 cron 清理。
+
+QQ 绑定 / 解绑错码锁：
+- 计数器 key：`qq_bind_fail:{qq}` / `qq_unbind_fail:{qq}`，每次错码 INCR + EXPIRE 10min（滑动窗口）。
+- 锁 key：`qq_bind_lock:{qq}` / `qq_unbind_lock:{qq}`，达到 5 次错码后 SetNX TTL 30min。
+- check 入口：`RequestCode` 与 `Confirm` 两条路径都先 `checkBindLock` 命中即拒；锁住情况下连"获取验证码"都不允许，避免攻击者通过定时探测试探 code 是否存在。
+- 成功 confirm 后 `clearBindFailures` 一并清掉计数器和锁。
+- HTTP 返回：429 + `code=4291`（区别于普通限流 `code=429`）+ `data.retry_after_seconds`，前端按 code 决定文案"已锁定 / 请稍后再试"。
+
+bot dispatch 限流（防误识别 / 滥用 / 自动化脚本刷屏）：
+- 实现：`logic/disambig_state.go::dispatchRateLimiter`，per-(group, user) 滑动窗口；窗口 1min，阈值 3 次。
+- 仅对**会改 hfut 状态**的 action 计数：`publish_good` / `publish_question` / `publish_answer`。
+  off_shelf / close_question 多候选时只是反问 + 等回应，不计数，避免用户消歧时反被限流。
+- 命中限流时返回 `ackKindAskUser` + "发布太频繁，请 Xs 后再来"——**不**调 hfut。
+
+#### P3.5 Kimi prompt 再调优（已完成核心两条）
+
+`utils/kimi/recognize.go::recognizeSystemPrompt` 增补两条 hard rule：
+
+13. **多图 / 文字主导原则**：判断依据始终是文字诉求；纯图 / 短互动文（`[图1] 看看`、`[图1] 这个怎么样`）一律 type=none，图片不能补救文本不足。
+14. **撤回 / 改主意 hard reject**：`算了不卖了`、`刚才那个不算`、`忽略我刚才说的`、`撤回上一条` → 全段 type=none；不替用户做"撤回 + 重新上架"二步操作。
+15. **不指代具体物品的"出"语句**：`出了 / 都出了 / 出门 / 拿出来` 这种没商品名 + 没价格的句子既不算 publish_good 也不算 off_shelf。
+
+未来再做：
+- 跨窗口短上下文：30s 内残句作为辅助 context（不参与识别打分，仅消歧辅助）。
+- 误识别样本回流到独立 audit 表（**目前先用 zap 结构化日志**，量足够再上表）。
 
 #### 其他
 
-- 重启窗口持久化（如果用了一段时间觉得"丢一半窗口"难受再做；目前接受丢）。
-- OSS 历史镜像清理：cron 任务清理 30 天前的 `user/*/bot/img_*` 文件（P1.4b 之后排期到这里）。
+- 重启窗口持久化（用了一段时间觉得"丢一半窗口"难受再做；目前接受丢）。
+- OSS 历史镜像清理：cron 任务清理 30 天前的 `user/*/bot/img_*` 文件（同 service_token_audit 一并 30 天 cron 化）。
 
 ---
 
