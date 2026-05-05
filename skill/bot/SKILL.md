@@ -573,15 +573,73 @@ bot 权限**严格收窄**到 5 类发布动作（publish_good / question / answ
 
 ### P3（精度优化 + 边缘）
 
-- 多个在售时反问消歧
-- "QQ 加急"功能完整实施：
-  - 前端：聊天气泡长按弹菜单 → "加急" → 红色气泡 + "加急"标识
-  - 后端：`order_messages` 加 `urgent` / `urged_at` 字段；hfut 加 `POST /orders/:id/messages/:msg_id/urge`；
-    bot 内部 HTTP API 加 `POST /internal/qq/send-private`（hfut 调 bot 发私聊），bot 反查接收人 QQ → NapCat send_private_msg
-  - 限流：同一对话每 5min 最多加急 1 次；接收人未绑 QQ → 直接拒绝
-  - 鉴权：bot 内部 API 用 `BOT_INTERNAL_API_TOKEN` env（hfut 一侧 known，跟 service token 不同）
-- 限流 / 错误锁定 / 审计日志
-- 重启窗口持久化（如果用了一段时间觉得"丢一半窗口"难受再做；目前接受丢）
+#### P3.1 前端文案精简（已完成）
+
+口径：用户端少看到长句说明，单条 banner / hint 控制在 ~10~14 字以内；不出现"兜底声明""请...后..."这种工具感强的措辞。
+
+实际改动：
+
+- `screens/GoodListScreen.tsx`
+  - "右上角选择参考位置后可显示距离" → "选定参考点后显示距离"
+  - "商品无坐标时无法算距" → "位置待定"
+  - "用来算商品与你的距离。可从地址簿选一条，或用当前定位。" → "选一个参考点，用来算商品距离"
+  - "还没有保存的地址，可在下方管理地址后添加" → "还没有保存的地址，去下方添加"
+- `screens/OrderChatScreen.tsx` banner 整体收紧
+  - 待付款（有 QR）：标题 "待付款" → **"获取收款码"**；副文案 "扫卖家收款码付款，付款后点「确认付款」上传截图。" → **"通过收款码付款后可进行下一步"**
+  - 待付款（无 QR）：副文案 "卖家未提供收款码，请在聊天里商定付款方式，付款后点「确认付款」上传截图。" → "卖家暂未提供收款码，可在聊天里商定"
+  - 求助 isSeller：标题 "进行中 · 待您支付酬劳" → "进行中 · 待支付酬劳"；副文案精简
+  - 求助 isBuyer st=1：副文案 "请按求助内容完成任务；发布者会在完成后上传付酬截图。" → "按要求完成；发布者随后上传付酬截图"
+  - 求助 isBuyer st=3：副文案 "请核对付酬截图；确认收到后点下方按钮，任务将标记为已完成。" → "核对付酬截图，确认即可标记完成"
+  - 求助 isSeller st=3：标题 "已上传付酬 · 待对方确认" → "已付酬 · 待对方确认"；副文案 → "等接单者确认收到酬劳"
+  - 二手 st=1 isSeller："核对买家付款截图后，上传你的收款截图完成确认" → "核对买家付款截图后，上传收款截图确认"
+  - 其他若干处用"，"代替"；"，去掉句末句号
+- `components/PaymentQrModal.tsx`
+  - emptyTitle "卖家未提供收款码" → "暂无收款码"；emptySub 同步收紧
+  - hint "转账后把付款截图发到聊天作为凭证" → "付款后发截图到聊天作为凭证"
+  - 保存成功 Alert 副文案 "打开相册即可使用收款码付款" → "可在相册中打开使用"
+- `components/CheckoutAddressModal.tsx`
+  - 默认 hint："聊天与订单绑定；创建订单后卖方可在订单中查看收货位置与距离。" → "下单后卖方可看到你的收货位置与距离"
+- `screens/GoodCreateScreen.tsx`
+  - 收款码 hint 两行说明合并为一句："上传后买家可在订单中查看；留空时由你和买家在聊天里商定"
+
+未来如果新增页面 / 状态：保持上述风格——**标题动词化**、**副文案 ≤14 汉字**、**不出现"请"开头的祈使长句**、**避免"将...转..."这种 RPC 化口吻**。
+
+#### P3.2 多在售时反问消歧（待做）
+
+场景：同一卖家在群里说"那个鞋架 5 块出了"，但 hfut 里能匹配到 ≥2 条该卖家的在售商品。当前 bot 直接挑 best match 上架/下架，存在误操作风险。
+
+设计方向：
+- bot 内部为该群当前轮维护一个"待消歧上下文"（短 TTL，1 分钟），存 `{user_qq, candidates: [good_id, title, price], action}`。
+- bot 在群里 reply：`@用户 你说的是 ① 三层鞋架 ¥6 ② 折叠桌 ¥30，回 1 / 2`。
+- 用户回 `1` / `2` / `①` 在窗口聚合内被识别为消歧选择，dispatcher 取上下文里的 action 走原流程。
+- 超时 / 用户改话题 → 上下文丢弃，bot 不主动追问。
+
+#### P3.3 QQ 加急（待做）
+
+- 前端：聊天气泡长按弹菜单 → "加急" → 红色气泡 + "加急"标识
+- 后端：`order_messages` 加 `urgent` / `urged_at` 字段；hfut 加 `POST /orders/:id/messages/:msg_id/urge`；
+  通过现有 `botinternal.SendPrivate`（JWT 鉴权，与 P2b 同一通路）发到对方 QQ。
+- 限流：同一对话每 5min 最多加急 1 次；接收人未绑 QQ 且没有 `created_in_group_id` → 直接拒绝；
+  接收人是孤儿旗下号（有 `created_in_group_id`）→ 走 `botinternal.SendGroup` 转发回原群（与 P2c orphan 转发一致）。
+- 鉴权：复用 P2b 已经建立的 hfut→bot **JWT 通路**（共享 `BOT_SERVICE_JWT_SECRET`，`iss=HFUT-Graduation-Project-hfut`）。**不再引入 `BOT_INTERNAL_API_TOKEN`**。
+
+#### P3.4 限流 / 错误锁定 / 审计日志（待做）
+
+- bot→hfut 的服务 token 调用：每次记录 `iss/sub/aud/jti/path/status` 到 `service_token_audit` 表（hfut 一侧）。
+- hfut→bot 的内部调用：bot 一侧记日志（已部分有，待结构化）。
+- QQ 绑定 / 解绑错误锁：错 5 次 → 锁 30min（P2a 暂未做的部分），落 Redis key `qq_bind_locked:{qq}` / `qq_unbind_locked:{qq}`。
+- bot 商品上架 / 问答发布：同一群同一发起人 1min 内 ≥3 次 → 加 cooldown，避免被误调用刷屏。
+
+#### P3.5 Kimi prompt 再调优（待做）
+
+- 多张图 + 文字混合：当前 mirror 后传给 Kimi 的图片是有限张数，需要明确 prompt 让 Kimi 在多图时仍以文字诉求为主，避免被无关图诱导。
+- 跨窗口短上下文：用户上一条窗口没说完，下一条窗口接着说，目前每个窗口独立识别。可以在窗口聚合层加 30s 内"上一句残文"作为额外 context，但不参与识别打分（仅用作 disambiguation 辅助）。
+- 误识别样本回流：把 Kimi 误识别的 case（用户后来发"取消上架"等）记录到 `kimi_recognize_audit`，定期回看再 tune prompt。
+
+#### 其他
+
+- 重启窗口持久化（如果用了一段时间觉得"丢一半窗口"难受再做；目前接受丢）。
+- OSS 历史镜像清理：cron 任务清理 30 天前的 `user/*/bot/img_*` 文件（P1.4b 之后排期到这里）。
 
 ---
 
