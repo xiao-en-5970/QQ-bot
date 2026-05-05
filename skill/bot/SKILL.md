@@ -299,6 +299,16 @@ bot **不**负责的事：
 
 - caller 自己是旗下账号（理论上 password 空登录不进来）→ `GetAccountIDsForOps` 只返回它自己，**不**递归向上找 parent——即便 admin 直接 SQL 改密码让旗下号能登录，攻击者也拿不到 parent 的资源
 - caller 没绑 QQ 旗下账号 → 集合只有 caller 本人，所有 IN 查询退化为单 user_id 等值，行为跟改造前一致
+
+#### 防"账号集内自交易"（订单）
+
+主账号在 app 给**自己旗下号**挂的商品下单 = 自己跟自己交易，会刷出虚假订单数 / 评分。
+`service.isSelfTrade(callerID, sellerID)` 用账号集判断："caller 自己" 或 "caller 的旗下号" 是 seller 都拒绝。已应用到：
+- `Create`（普通商品下单）
+- `createHelpOrder`（有偿求助接单）
+- `createDraft`（"我想要"创建会话草稿）
+
+通知层（点赞 / 评论自己内容）：`emit` 入库前 dedupe `from_user_id == user_id`，且重定向后再 dedupe 一次—— "主账号 X 点赞自己旗下号商品" 静默跳过，不发通知、不计数。
 - **"QQ 加急"功能**（P3 排期）：商品聊天界面**长按聊天气泡 → 弹出菜单 → 选"加急" → bot 把这条聊天发给对方 QQ 私聊**。
   - 前端 UI：被加急的气泡渲染成**红色** + 标注"加急"标识（让发送人和接收人都看到）
   - 后端：长按"加急"后调 hfut 接口（如 `POST /api/v1/orders/:id/messages/:msg_id/urge`），hfut 反查接收人 → 调 bot 内部 API → bot 发 QQ 私聊
