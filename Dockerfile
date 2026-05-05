@@ -72,5 +72,8 @@ COPY package/jmoption ./package/jmoption
 # 部署机用 -v /qq-bot-server/cache:/tmp/qq-bot 一次挂出来
 RUN mkdir -p /tmp/qq-bot/jm /tmp/qq-bot/pdf /tmp/qq-bot/logs
 
-# 不开放任何端口（轮询型 bot，不接收外部请求）
+# 仅文档性声明：bot internal HTTP API（hfut 反向调用）默认 8090，跟 BOT_INTERNAL_API_PORT env 对齐。
+# **EXPOSE 不会自动暴露端口给宿主机**——docker-compose 还需要 ports: ["127.0.0.1:8090:8090"]
+# 才能让 nginx 反代到这个端口；详见 skill/bot/SKILL.md "绑定 QQ 流程"段。
+EXPOSE 8090
 CMD ["./app"]

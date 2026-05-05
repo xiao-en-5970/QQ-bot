@@ -325,7 +325,9 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 
 ### 限流
 
-- 同一 user 5min 内最多请求 1 次验证码（redis SetNX `qq_bind_throttle:{user_id}` TTL 5min）
+- 同一 user 60 秒内最多请求 1 次验证码（redis SetNX `qq_bind_throttle:{user_id}` TTL 60s）
+  跟前端"获取验证码"按钮的倒计时对齐——常规体验
+- 每次新请求会显式 Del 旧的 `qq_bind_code:{qq}`（同 QQ 的旧验证码立即失效），避免歧义
 - 错 5 次 → 锁 30min（**P2a 暂未做**，等观察实际滥用情况再 P3 加）
 
 ### 错误回执（前端按需提示）
@@ -335,7 +337,7 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 | 400 | `ErrQQNumberInvalid` / `ErrUserNotBoundSchool` / `ErrUserAlreadyBoundQQ` | 提示具体原因（"请先绑学校"/"已绑过 QQ"等） |
 | 400 | `ErrCodeInvalid` / `ErrCodeExpired` | "验证码错误 / 已过期，请重试" |
 | 404 | `ErrBotNotFriend` | "请先把 bot 加为好友再尝试绑定" |
-| 429 | `ErrThrottled` | "请求过于频繁，请 5 分钟后再试" |
+| 429 | `*ThrottledError` | "请求过于频繁，请 N 秒后再试"；data 里 `retry_after_seconds` 给前端做按钮倒计时 |
 | 502 | `ErrBotUnavailable` | "系统繁忙，稍后再试" |
 
 ---

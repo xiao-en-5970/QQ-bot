@@ -1,7 +1,8 @@
 name: CI/CD
 
 # 分支 push：仅静态分析；tag push：静态分析 + 在 Actions 编译 Linux 二进制 + rsync + 部署机打包镜像并运行
-# 容器名：qq-bot-server，无端口映射（QQ-bot 是轮询型 bot，不接收外部请求）
+# 容器名：qq-bot-server
+# 端口映射：127.0.0.1:8090 -> 容器 8090（hfut 反向调用 internal API 用，由宿主机 nginx 反代到 https://bot.xiaoen.xyz；不暴露公网，详见 skill/bot/SKILL.md "绑定 QQ 流程"段）
 # 配置走 HFUT 模式：宿主机 /qq-bot-server/.env -> docker run --env-file，YAML 不进容器
 permissions:
   contents: read
@@ -120,10 +121,16 @@ jobs:
           docker stop qq-bot-server 2>/dev/null || true
           docker rm qq-bot-server 2>/dev/null || true
 
-          # 不映射端口（轮询型 bot），单挂载缓存目录 + 注入 env
+          # 端口映射：127.0.0.1:8090（仅本机，不暴露公网；nginx 反代到 https://bot.xiaoen.xyz）
+          # 优先读 .env 里的 BOT_INTERNAL_API_PORT 让宿主机映射端口跟容器内 listen 端口对齐；空则默认 8090
+          BOT_PORT=\$(grep -E '^BOT_INTERNAL_API_PORT=' "\$ENV_FILE" | tail -1 | sed -E 's/^[^=]*=//' | tr -d '[:space:]')
+          BOT_PORT="\${BOT_PORT:-8090}"
+          echo "[deploy] internal API 监听端口: \$BOT_PORT（仅 127.0.0.1）"
+
           docker run -d --name qq-bot-server \
             --restart unless-stopped \
             --env-file /tmp/.env.qq-bot.docker \
+            -p "127.0.0.1:\${BOT_PORT}:\${BOT_PORT}" \
             -v /qq-bot-server/cache:/tmp/qq-bot \
             "qq-bot-server:${TAG}"
 
