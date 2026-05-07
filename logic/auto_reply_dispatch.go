@@ -160,14 +160,14 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 	// 转存到 hfut OSS 拿永久 URL；任一张转存失败就 skip 那张（不让整体上架失败）
 	images := mirrorImagesToHfut(ctx, userID, napcatImages)
 
-	// price: nil / Negotiable=true / 非正数 → 0 + Negotiable=true，hfut 按 negotiable 展示面议
+	// 面议：未给价（price nil）或用户/模型标明 negotiable／「面议」；明确 0 元/免费送仍是非面议，标价 0 分。
 	priceCents := 0
 	negotiable := a.Negotiable || a.Price == nil
-	if !negotiable && a.Price != nil && *a.Price <= 0 {
-		negotiable = true
-	}
 	if !negotiable && a.Price != nil {
 		priceCents = int(*a.Price * 100) // 元 → 分
+		if priceCents < 0 {
+			priceCents = 0
+		}
 	}
 
 	// resp 里有 GoodID，但我们不再把它给用户看——用户上架后想找到这条商品，直接打开 app

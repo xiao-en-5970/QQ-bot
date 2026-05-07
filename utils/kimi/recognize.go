@@ -67,7 +67,7 @@ type RecognizeAction struct {
 	Title       string   `json:"title,omitempty"`       // 商品标题（短）
 	Description string   `json:"description,omitempty"` // 详细描述（可长）
 	Price       *float64 `json:"price,omitempty"`       // 价格；nil 视为未提供（配合 Negotiable）
-	Negotiable  bool     `json:"negotiable,omitempty"`  // true = 用户没明确价格 / 写"面议"
+	Negotiable  bool     `json:"negotiable,omitempty"`  // true = 未说价或明确「面议」；与 price=0 免费送不同
 	Category    int      `json:"category,omitempty"`    // 1=二手 2=有偿求助
 	Location    string   `json:"location,omitempty"`    // 地点（"新区" / "下铺" / 见面地等）；没明确就空
 
@@ -130,9 +130,9 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
    - 同一动作可关联多张连续图（一个商品多张实拍）。
 6. **价格判定**:
    - 明确数字（"6元"、"15r"、"6 块"）→ price = 6.0；negotiable=false
-   - 写了"面议"、"看心情"、"私聊价"、根本没说价 → price 不填；negotiable=true
-   - price 写成 0、负数或语义明显不是真实标价 → negotiable=true，不设 price（上架侧按面议处理）
-   - 区间价（"5-10"）→ 取下限作为 price，description 里说明"5-10元"
+   - 明确「0」「0元」「免费」「白送」「不要钱」「无偿」→ price = 0.0；negotiable=false（≠ 面议）
+   - 写了"面议"、"看心情"、"私聊价"、**完全没说价** → price 字段不输出；negotiable=true
+   - 区间价（"5-10"）→ 取下限作为 price，description 里说明"5-10元"，negotiable=false
 7. **category 判定**:
 
    category=1 = "卖东西/出东西板块"——发布者把**自己持有的东西**给别人，换钱。
