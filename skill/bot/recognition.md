@@ -182,7 +182,9 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 
 regex 兜底识别结果的 `Confidence` 固定为 `0.6`（vs LLM 的 0.0~1.0 浮动）。`auto_reply_dispatch.go` 在 ack 文案上**显式区分**：
 
-- LLM 路径：`已为你上架二手「鞋架」：6 元（goods_id=42）`
-- regex 兜底：`已（关键词识别）上架二手「鞋架」：6 元（goods_id=42）；如不对请回'撤销'`
+- LLM 路径：`上架成功 二手「鞋架」 6 元，食堂，配图 2 张`
+- regex 兜底：`上架成功 二手「鞋架」 6 元，食堂，配图 2 张（关键词识别，如不对回"撤销"）`
 
 让用户感知"现在是兜底模式"，撤销路径靠现有"撤回 hard reject" + "@bot 下架"。
+
+文案原则：**不暴露专业 ID/技术字段**（goods_id、article_id 等）——用户在 app 里能看到自己刚发的内容，回执只确认"做了什么 + 关键属性"。详见 `skill/bot/verbosity.md`。

@@ -8,6 +8,11 @@
 //	StartAutoReplyScanner goroutine (5s 间隔) 扫描所有桶：
 //	  → 桶满（>= MaxWindowSize）or 沉默够久（now - LastSeenAt >= WindowSeconds） → flush
 //	  → flush 时把整段消息丢给 Kimi 做"业务动作识别"
+//
+//	「不等 60s」的特例（仍为单桶单用户）：
+//	  - 待消歧时回 1/2/3——立刻 flush（原 P3.2）
+//	  - 去重提示后回「下架旧的」且有待下架 follow-up——立刻 flush，`processDupOffShelfAck` 里直接 OffShelf
+//	  - 单条纯文字、无图、正则与关键词都不像上架/下架/求助——立刻丢弃桶，静默（不调 Kimi、不占满 silence）
 //	  → P0 阶段：识别到动作只 log + 群里 @ 用户回执"识别到 XXX，业务接通中"，不真调 hfut
 //
 // 设计要点：
@@ -127,6 +132,9 @@ func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *mod
 		if disambigChoiceFromText(flat) > 0 && disambigMgr.Get(key) != nil {
 			shouldFlush = true
 		}
+		if !shouldFlush && dupOffShelfMgr.Peek(key) != nil && matchesDupOffShelfReply(flat) {
+			shouldFlush = true
+		}
 	}
 
 	if shouldFlush {
@@ -134,6 +142,11 @@ func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *mod
 		snapshot := b.Msgs
 		b.Msgs = nil
 		go m.processSnapshot(key, snapshot)
+		return
+	}
+	// 单条、纯文字、不像任何业务语料、regex 也认不出 → 立刻丢桶（不等 silence 窗口，也不调 Kimi）
+	if tryInstantSilentChitChat(key, b) {
+		return
 	}
 }
 
@@ -193,6 +206,10 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 	for i, msg := range snap {
 		zaplog.Logger.Infof("  [%d] msgid=%d %s | %s",
 			i+1, msg.MessageID, msg.Time.Format("15:04:05"), truncateForLog(msg.FlatText, 200))
+	}
+
+	if processDupOffShelfAck(key, snap) {
+		return
 	}
 
 	// P3.2：消歧选择消费——如果当前 (group, user) 有 pending disambig 上下文，
@@ -337,55 +354,36 @@ func buildRecognizeInput(key autoReplyBucketKey, userCard string, snap []autoRep
 	}
 }
 
-// buildAckMessage 把识别到的 RecognizeAction 翻成一条群里 @ 用户的回执文本。
+// buildAckMessage 把识别到的 RecognizeAction 翻成一条群里 @ 用户的占位回执。
 //
-// P0 阶段所有回执都加 [识别测试] 前缀，明确标注"暂未真发布"——避免群友以为已经上架了去找。
-// P1 阶段把 [识别测试] 删掉、把"暂未真发布"改成实际的 hfut 商品 ID 链接。
+// 仅在 global.Hfut == nil（HFUT_API_URL/TOKEN 未配齐）时被 processSnapshot 调到——
+// 线上完整环境不会走这里。文案站在普通用户视角："服务暂时不可用" 比 "业务对接中"
+// 更直白，不暴露专业 ID/技术字段。
 func buildAckMessage(a kimi.RecognizeAction) string {
-	const prefix = "[识别测试]"
 	switch a.Type {
 	case "publish_good":
 		category := "二手"
 		if a.Category == 2 {
 			category = "有偿求助"
 		}
-		var b strings.Builder
-		b.WriteString(prefix)
-		b.WriteString(" 检测到你想上架")
-		b.WriteString(category)
-		b.WriteString("「")
-		b.WriteString(orPlaceholder(a.Title, "(无标题)"))
-		b.WriteString("」")
-		if a.Negotiable || a.Price == nil {
-			b.WriteString(" 价格面议")
-		} else {
-			b.WriteString(fmt.Sprintf(" 价格 %g 元", *a.Price))
-		}
-		if a.Location != "" {
-			b.WriteString(" 地点 ")
-			b.WriteString(a.Location)
-		}
-		if len(a.ImageMessageIDs) > 0 {
-			b.WriteString(fmt.Sprintf(" 图×%d", len(a.ImageMessageIDs)))
-		}
-		b.WriteString("，业务对接中（暂未真发布）")
-		return b.String()
+		return fmt.Sprintf("收到上架请求 %s「%s」，但服务暂时不可用，过会儿再试",
+			category, orPlaceholder(a.Title, "未命名"))
 
 	case "publish_question":
-		return fmt.Sprintf("%s 检测到你想发起提问「%s」，业务对接中（暂未真发布）",
-			prefix, orPlaceholder(a.QuestionTitle, "(未识别标题)"))
+		return fmt.Sprintf("收到提问「%s」，但服务暂时不可用，过会儿再试",
+			orPlaceholder(a.QuestionTitle, "未命名"))
 
 	case "publish_answer":
-		hint := orPlaceholder(a.AnswerHintTo, "(未识别针对哪条提问)")
-		return fmt.Sprintf("%s 检测到你想回答「%s」，业务对接中（暂未真发布）", prefix, hint)
+		hint := orPlaceholder(a.AnswerHintTo, "刚才那条")
+		return fmt.Sprintf("收到对「%s」的回答，但服务暂时不可用，过会儿再试", hint)
 
 	case "off_shelf":
-		hint := orPlaceholder(a.OffShelfHint, "(未指明，多个在售时会反问)")
-		return fmt.Sprintf("%s 检测到你想下架「%s」，业务对接中（暂未真下架）", prefix, hint)
+		hint := orPlaceholder(a.OffShelfHint, "你想下架的商品")
+		return fmt.Sprintf("收到下架请求「%s」，但服务暂时不可用，过会儿再试", hint)
 
 	case "close_question":
-		hint := orPlaceholder(a.CloseQuestionHint, "(未指明)")
-		return fmt.Sprintf("%s 检测到你想关闭提问「%s」，业务对接中（暂未真关闭）", prefix, hint)
+		hint := orPlaceholder(a.CloseQuestionHint, "你想关闭的提问")
+		return fmt.Sprintf("收到关闭请求「%s」，但服务暂时不可用，过会儿再试", hint)
 
 	default:
 		return ""
