@@ -83,11 +83,6 @@ func dispatchActionToHfut(
 	snap []autoReplyMsg,
 	action kimi.RecognizeAction,
 ) ackResult {
-	// seek_goods：只读检索，不落库、不走 upsert、不计入变更限流。
-	if action.Type == "seek_goods" {
-		return dispatchSeekGoods(ctx, key, action)
-	}
-
 	// 第 1 步：限流（P3.4）——仅对会"落库 / 改状态"的动作生效。
 	// 反问类（off_shelf 多候选 / close_question 多候选）落到这里其实只是"反问 + 等回应"，
 	// 也算一次 dispatch，但这一类不计数（避免用户被反问后立刻又触发限流）。
@@ -124,13 +119,15 @@ func dispatchActionToHfut(
 	case "publish_good":
 		return dispatchPublishGood(ctx, key, upsert.UserID, snap, action)
 	case "publish_question":
-		return dispatchPublishQuestion(ctx, upsert.UserID, snap, action)
+		return dispatchPublishQuestion(ctx, key, upsert.UserID, snap, action)
 	case "publish_answer":
 		return dispatchPublishAnswer(ctx, key.GroupID, upsert.UserID, action)
 	case "off_shelf":
 		return dispatchOffShelf(ctx, key, upsert.UserID, action)
 	case "close_question":
 		return dispatchCloseQuestion(ctx, key, upsert.UserID, action)
+	case "seek_goods":
+		return dispatchSeekGoods(ctx, key, upsert.UserID, snap, action)
 	default:
 		// 未知 type 不该走到这里（processSnapshot 那边已经过滤过 none）
 		return ackResult{Kind: ackKindIgnore}
@@ -138,9 +135,11 @@ func dispatchActionToHfut(
 }
 
 // isMutatingAction 判定一个 action 是否会"真改 hfut 状态"——只有这些才计数限流。
+//
+// seek_goods 也算 mutating：它会把"求购"作为 publish_good(category=2, 面议) 真正落库。
 func isMutatingAction(actionType string) bool {
 	switch actionType {
-	case "publish_good", "publish_question", "publish_answer":
+	case "publish_good", "publish_question", "publish_answer", "seek_goods":
 		return true
 	}
 	return false
@@ -152,54 +151,145 @@ func qqNumberOf(userID int64) string {
 	return fmt.Sprintf("%d", userID)
 }
 
-// dispatchSeekGoods 按 seek_hint 检索本校在售二手；有命中则提示第一条（最新）。
-func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, a kimi.RecognizeAction) ackResult {
-	q := strings.TrimSpace(a.SeekHint)
-	if q == "" {
+// dispatchSeekGoods 处理「收/求/求购/收购 + 物品」（无价场景）：
+//
+//  1. 在本校在售二手里搜一下，命中则给"你是否在找…"的提示
+//  2. 把求购意图作为 publish_good(category=2 求物品, price=0, negotiable=false) 落库——
+//     让别的同学也能在 app 里看到。前端不展示价格，也不挂"有偿"tag。
+//
+// 两步合并成一条群里 ack；任一步失败不影响另一步该有的回执。
+func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
+	title := strings.TrimSpace(a.SeekHint)
+	if title == "" {
 		return ackResult{Kind: ackKindIgnore}
 	}
-	list, err := global.Hfut.SearchGoodsSeek(ctx, key.GroupID, q, 5)
-	if err != nil {
-		if errors.Is(err, hfut.ErrGroupNoSchool) {
-			return ackResult{Kind: ackKindIgnore}
+
+	// 第 1 步：检索现有在售
+	hintLine := buildSeekMatchHint(ctx, key.GroupID, title)
+
+	// 第 2 步：上架为「求物品」（cat=2、price=0、非面议——前端隐藏价格、不挂"有偿"tag）
+	desc := strings.TrimSpace(a.Description)
+	if desc == "" {
+		desc = firstTextFromSnap(snap)
+	}
+	if desc == "" {
+		desc = title
+	}
+
+	pubResp, pubErr := global.Hfut.PublishGood(ctx, hfut.PublishGoodReq{
+		UserID:     userID,
+		GroupID:    key.GroupID,
+		Title:      title,
+		Content:    desc,
+		Category:   2,
+		Negotiable: false,
+		Price:      0,
+	})
+
+	if pubErr != nil {
+		var dup *hfut.DuplicateGoodInfo
+		if errors.As(pubErr, &dup) {
+			zaplog.Logger.Infof("autoReply seek_goods 去重命中 user=%d title=%q existing=%d/%q",
+				userID, title, dup.ExistingID, dup.ExistingTitle)
+			dupOffShelfMgr.Save(key, userID, dup.ExistingID, dup.ExistingTitle)
+			dupTitle := dup.ExistingTitle
+			if dupTitle == "" {
+				dupTitle = title
+			}
+			text := joinAckLines(hintLine, fmt.Sprintf("求物品「%s」已发过。要重发先回：下架旧的", dupTitle))
+			return ackResult{Text: text, Kind: ackKindDup}
 		}
-		zaplog.Logger.Errorf("autoReply seek_goods hfut 失败 group=%d q=%q: %v", key.GroupID, q, err)
-		return ackResult{Text: "忙，稍后再试", Kind: ackKindFail}
+		zaplog.Logger.Errorf("autoReply seek_goods PublishGood 失败 user=%d title=%q: %v", userID, title, pubErr)
+		// 至少把搜索提示发出来，让用户拿到价值
+		if hintLine != "" {
+			return ackResult{Text: hintLine, Kind: ackKindSuccess}
+		}
+		return ackResult{
+			Text: fmt.Sprintf("求物品「%s」未发出，稍后再试", title),
+			Kind: ackKindFail,
+		}
+	}
+
+	// 记录"最近一条"——求物品也按 cat=2 落到 recentGoodMgr，后续"不要了"可定位
+	if pubResp != nil {
+		recentGoodMgr.Save(key, userID, pubResp.GoodID, title, 2)
+	}
+
+	// 上架成功后异步上报运维群（不阻塞主回执）
+	go NotifyOpsPublish(nil, key.GroupID, key.UserID, "", "求物品(无价/求购)", title,
+		fmt.Sprintf("发起人 user_id: %d", userID))
+
+	pubLine := fmt.Sprintf("已发求物品「%s」，等同学在 app 内联系你", title)
+	return ackResult{
+		Text: joinAckLines(hintLine, pubLine),
+		Kind: ackKindSuccess,
+	}
+}
+
+// buildSeekMatchHint 取 SearchGoodsSeek 的第一条结果格式化成「你是否在找…」一行。
+// 群没配学校 / 无命中 / 网络错都返回空串——调用方自行决定是否拼接。
+func buildSeekMatchHint(ctx context.Context, groupID int64, q string) string {
+	list, err := global.Hfut.SearchGoodsSeek(ctx, groupID, q, 5)
+	if err != nil {
+		if !errors.Is(err, hfut.ErrGroupNoSchool) {
+			zaplog.Logger.Warnf("autoReply seek_goods 搜索失败 group=%d q=%q: %v", groupID, q, err)
+		}
+		return ""
 	}
 	if len(list) == 0 {
-		return ackResult{Kind: ackKindIgnore}
+		return ""
 	}
 	g := list[0]
-	created, err := parseHFUTTime(g.CreatedAt)
-	if err != nil {
-		zaplog.Logger.Warnf("autoReply seek_goods 解析 created_at=%q: %v", g.CreatedAt, err)
+	created, perr := parseHFUTTime(g.CreatedAt)
+	if perr != nil {
+		zaplog.Logger.Warnf("autoReply seek_goods 解析 created_at=%q: %v", g.CreatedAt, perr)
 		created = time.Now()
 	}
 	days := int(time.Since(created).Hours() / 24)
 	if days < 0 {
 		days = 0
 	}
-	priceStr := "面议"
-	if !g.Negotiable {
+	// 价格展示与新规则对齐：
+	//   - negotiable=true → "面议"
+	//   - price>0       → "X 元"
+	//   - price=0 非面议 → "免费"（cat=1 二手里偶尔有"白送"）
+	var priceStr string
+	switch {
+	case g.Negotiable:
+		priceStr = "面议"
+	case g.Price > 0:
 		priceStr = fmt.Sprintf("%g 元", float64(g.Price)/100)
+	default:
+		priceStr = "免费"
 	}
 	contact := "app内联系"
 	if g.OrphanSeller && strings.TrimSpace(g.SellerQQ) != "" {
 		contact = fmt.Sprintf("QQ：%s", strings.TrimSpace(g.SellerQQ))
 	}
-	var b strings.Builder
-	b.WriteString("你是否在找「")
-	b.WriteString(strings.TrimSpace(g.Title))
-	b.WriteString("」，约 ")
-	fmt.Fprintf(&b, "%d", days)
-	b.WriteString(" 天前上架，价格 ")
-	b.WriteString(priceStr)
-	b.WriteString("，联系方式：")
-	b.WriteString(contact)
-	if kimi.IsRegexFallback(&a) {
-		b.WriteString("（兜底识别，不对请忽略）")
+	return fmt.Sprintf("你是否在找「%s」，约 %d 天前上架，价格 %s，联系方式：%s",
+		strings.TrimSpace(g.Title), days, priceStr, contact)
+}
+
+// firstTextFromSnap 从窗口里挑第一条非空文本，作为 publish_good 的 content 兜底。
+func firstTextFromSnap(snap []autoReplyMsg) string {
+	for _, m := range snap {
+		if t := strings.TrimSpace(m.FlatText); t != "" {
+			return t
+		}
 	}
-	return ackResult{Text: b.String(), Kind: ackKindSuccess}
+	return ""
+}
+
+// joinAckLines 用换行串多行 ack；空行自动跳过。
+func joinAckLines(lines ...string) string {
+	parts := make([]string, 0, len(lines))
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			parts = append(parts, l)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func parseHFUTTime(s string) (time.Time, error) {
@@ -237,19 +327,27 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 	// 转存到 hfut OSS 拿永久 URL；任一张转存失败就 skip 那张（不让整体上架失败）
 	images := mirrorImagesToHfut(ctx, userID, napcatImages)
 
-	// 面议：未给价（price nil）或用户/模型标明 negotiable／「面议」；明确 0 元/免费送仍是非面议，标价 0 分。
+	// 价格 / 面议判定（产品形态：cat=1 二手；cat=2 求物品）
+	//
+	//   - 模型 negotiable=true → 用户**显式**写了"面议"，前端展示"面议"
+	//   - 模型给了 price → 走价格分；priceCents = price*100
+	//   - 完全没说价：cat=1 默认面议（卖东西需要让买家私聊）；
+	//                  cat=2 保持 price=0 + negotiable=false（前端不展示价格、也不挂"有偿"tag）
 	priceCents := 0
-	negotiable := a.Negotiable || a.Price == nil
-	if !negotiable && a.Price != nil {
+	if a.Price != nil {
 		priceCents = int(*a.Price * 100) // 元 → 分
 		if priceCents < 0 {
 			priceCents = 0
 		}
 	}
+	negotiable := a.Negotiable
+	if !negotiable && a.Price == nil && a.Category == 1 {
+		negotiable = true
+	}
 
-	// resp 里有 GoodID，但我们不再把它给用户看——用户上架后想找到这条商品，直接打开 app
-	// "我的发布" 列表就能看到。专业 ID 字段对不懂代码的用户没意义，只会增加阅读负担。
-	_, err := global.Hfut.PublishGood(ctx, hfut.PublishGoodReq{
+	// resp 里有 GoodID 用于"最近一条"快速查找；不在群里展示给用户——
+	// 用户在 app "我的发布" 列表能看到刚发的，没必要再给个数字增加阅读负担。
+	resp, err := global.Hfut.PublishGood(ctx, hfut.PublishGoodReq{
 		UserID:     userID,
 		GroupID:    groupID,
 		Title:      strings.TrimSpace(a.Title),
@@ -287,21 +385,30 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 	}
 
 	// 成功回执——只展示用户能看懂的字段：分类 / 标题 / 价格 / 地点 / 配图数。
+	//
+	// 价格展示规则（与前端 tag 规则对齐，用户视角）：
+	//   - 二手 / 求物品：negotiable=true 显示"面议"
+	//   - 二手 / 求物品：price>0 显示价格；cat=2 时额外加"（有偿）"
+	//   - cat=2 + price=0 + 非面议：不展示价格（产品上前端也不展示）
 	category := "二手"
 	if a.Category == 2 {
-		category = "有偿求助"
-	}
-	priceStr := "面议"
-	if !negotiable {
-		priceStr = fmt.Sprintf("%g 元", *a.Price)
+		category = "求物品"
 	}
 	var b strings.Builder
-	b.WriteString("上架成功 ")
+	b.WriteString("已上架 ")
 	b.WriteString(category)
 	b.WriteString("「")
 	b.WriteString(orPlaceholder(a.Title, "未命名"))
-	b.WriteString("」 ")
-	b.WriteString(priceStr)
+	b.WriteString("」")
+	switch {
+	case negotiable:
+		b.WriteString(" 面议")
+	case priceCents > 0:
+		fmt.Fprintf(&b, " %g 元", float64(priceCents)/100)
+		if a.Category == 2 {
+			b.WriteString("（有偿）")
+		}
+	}
 	if a.Location != "" {
 		b.WriteString("，")
 		b.WriteString(a.Location)
@@ -309,10 +416,40 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 	if len(images) > 0 {
 		fmt.Fprintf(&b, "，配图 %d 张", len(images))
 	}
-	if kimi.IsRegexFallback(&a) {
-		// quota 冷却时走 regex 兜底——告知用户这是关键词识别的结果，让他能秒撤销
-		b.WriteString("（兜底识别，不对说撤销）")
+	// 记录"最近一条"——给后续"不要了 / 不卖了"上下文化处理用
+	if resp != nil {
+		recentGoodMgr.Save(key, userID, resp.GoodID, strings.TrimSpace(a.Title), a.Category)
 	}
+
+	// 上架成功后异步上报运维群（不阻塞主回执）
+	opsKind := "二手"
+	if a.Category == 2 {
+		opsKind = "求物品"
+	}
+	opsPriceLine := ""
+	switch {
+	case negotiable:
+		opsPriceLine = "价格: 面议"
+	case priceCents > 0:
+		if a.Category == 2 {
+			opsPriceLine = fmt.Sprintf("价格: %g 元（有偿）", float64(priceCents)/100)
+		} else {
+			opsPriceLine = fmt.Sprintf("价格: %g 元", float64(priceCents)/100)
+		}
+	default:
+		opsPriceLine = "价格: 0 / 无"
+	}
+	opsLoc := ""
+	if a.Location != "" {
+		opsLoc = "地点: " + a.Location
+	}
+	opsImgs := ""
+	if len(images) > 0 {
+		opsImgs = fmt.Sprintf("配图: %d 张", len(images))
+	}
+	go NotifyOpsPublish(nil, key.GroupID, key.UserID, "", opsKind, strings.TrimSpace(a.Title),
+		opsPriceLine, opsLoc, opsImgs, fmt.Sprintf("user_id: %d", userID))
+
 	return ackResult{
 		Text: b.String(),
 		Kind: ackKindSuccess,
@@ -484,7 +621,7 @@ func guessImageFilename(srcURL, contentType string) string {
 // publish_question / publish_answer / close_question — 提问 + 回答
 // =============================================================================
 
-func dispatchPublishQuestion(ctx context.Context, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
+func dispatchPublishQuestion(ctx context.Context, key autoReplyBucketKey, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
 	napcatImages := imageURLsFromSnap(snap, a.ImageMessageIDs)
 	images := mirrorImagesToHfut(ctx, userID, napcatImages)
 	// resp.ArticleID 不外露——用户在 app "我的提问" 里就能看到刚发的，没必要给个数字。
@@ -498,13 +635,17 @@ func dispatchPublishQuestion(ctx context.Context, userID uint, snap []autoReplyM
 	if err != nil {
 		zaplog.Logger.Errorf("autoReply hfut PublishArticle(question) 失败 user=%d: %v", userID, err)
 		return ackResult{
-			Text: fmt.Sprintf("提问「%s」未发出，稍后再试",
+			Text: fmt.Sprintf("求解答「%s」未发出，稍后再试",
 				orPlaceholder(a.QuestionTitle, "这条")),
 			Kind: ackKindFail,
 		}
 	}
+	// 上架成功后异步上报运维群
+	go NotifyOpsPublish(nil, key.GroupID, key.UserID, "", "求解答", strings.TrimSpace(a.QuestionTitle),
+		fmt.Sprintf("user_id: %d", userID))
+
 	return ackResult{
-		Text: fmt.Sprintf("提问已发「%s」",
+		Text: fmt.Sprintf("已发求解答「%s」",
 			orPlaceholder(a.QuestionTitle, "未命名")),
 		Kind: ackKindSuccess,
 	}
@@ -514,7 +655,7 @@ func dispatchPublishAnswer(ctx context.Context, groupID int64, userID uint, a ki
 	hint := strings.TrimSpace(a.AnswerHintTo)
 	if hint == "" {
 		return ackResult{
-			Text: "答哪条？带上提问里的词",
+			Text: "答哪条？带上求解答里的关键词",
 			Kind: ackKindAskUser,
 		}
 	}
@@ -526,7 +667,7 @@ func dispatchPublishAnswer(ctx context.Context, groupID int64, userID uint, a ki
 	parent := matchQuestion(openQs, hint)
 	if parent == nil {
 		return ackResult{
-			Text: fmt.Sprintf("没找到「%s」相关提问", hint),
+			Text: fmt.Sprintf("没找到「%s」相关求解答", hint),
 			Kind: ackKindAskUser,
 		}
 	}
@@ -562,7 +703,7 @@ func dispatchCloseQuestion(ctx context.Context, key autoReplyBucketKey, userID u
 	// 只考虑这个 user 自己发布的提问；筛出后再匹配 hint
 	mine := filterMyQuestions(openQs, userID)
 	if len(mine) == 0 {
-		return ackResult{Text: "没有进行中的提问", Kind: ackKindAskUser}
+		return ackResult{Text: "没有进行中的求解答", Kind: ackKindAskUser}
 	}
 	var target *hfut.OpenQuestion
 	if hint == "" && len(mine) == 1 {
@@ -605,6 +746,30 @@ func dispatchCloseQuestion(ctx context.Context, key autoReplyBucketKey, userID u
 
 func dispatchOffShelf(ctx context.Context, key autoReplyBucketKey, userID uint, a kimi.RecognizeAction) ackResult {
 	hint := strings.TrimSpace(a.OffShelfHint)
+
+	// hint 为空时优先看"最近一条上架"——用户的"不要了 / 不卖了"通常是指刚发的那条；
+	// 命中即直接 OffShelfGood（cat=1 / cat=2 都按相同接口下架），文案区分"二手 / 求物品"。
+	if hint == "" {
+		if recent := recentGoodMgr.Peek(key); recent != nil && recent.HfutUserID == userID {
+			if err := global.Hfut.OffShelfGood(ctx, recent.GoodID, userID); err != nil {
+				zaplog.Logger.Warnf("autoReply 最近一条 OffShelfGood 失败 good=%d user=%d: %v——退化为列表匹配",
+					recent.GoodID, userID, err)
+				// 失败不直接 fail：可能商品已被别的路径下架，让下面的 ListActiveGoods 兜底
+			} else {
+				recentGoodMgr.Take(key)
+				kindLabel := "二手"
+				if recent.Category == 2 {
+					kindLabel = "求物品"
+				}
+				show := orPlaceholder(recent.Title, "刚发的那条")
+				return ackResult{
+					Text: fmt.Sprintf("已撤销%s「%s」", kindLabel, show),
+					Kind: ackKindSuccess,
+				}
+			}
+		}
+	}
+
 	goods, err := global.Hfut.ListActiveGoods(ctx, userID, 20)
 	if err != nil {
 		zaplog.Logger.Errorf("autoReply ListActiveGoods 失败 user=%d: %v", userID, err)

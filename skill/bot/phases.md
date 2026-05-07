@@ -70,8 +70,12 @@ bot 权限**严格收窄**到 5 类发布动作，所有 app 内交互（评论/
 - ✅ **创建群持久化**：`users` 加 `created_in_group_id` 字段（迁移：`migrate_qq_child_orphan_group.sql`）；`BotUpsertQQChild` 创建旗下号时填，`first-seen` 群作为孤儿转发回的目标群
 - ✅ **孤儿 inbound 通知转发**：`notification.dispatchInbound` 用 `ResolveInboundTarget` 4 路分流
 - ✅ **孤儿商品 VO**：GET /goods/:id 及列表条目在 owner 是孤儿时返回 `is_orphan_owner: true` + `seller_qq_number`
-- ✅ **孤儿商品前端切换**：`hfut-front/src/screens/GoodDetailScreen.tsx` 检测到 `is_orphan_owner=true` → 隐藏"我想要"按钮，改为"通过 QQ 联系：QQ-XXX"告示 + "请求下架"按钮
-- ✅ **请求下架**：`POST /api/v1/goods/:id/request-off-shelf` —— bot 在群里 @ 卖家：`「标题」已经出了吗？请回答是或不是。`（无 goods_id）；失败清限流锁；同 (caller, good) 1h 限 1 次
+- ✅ **孤儿商品前端切换**：`hfut-front/src/screens/GoodDetailScreen.tsx` 检测到 `is_orphan_owner=true` → 隐藏"我想要"按钮，改为"通过 QQ 联系：QQ-XXX"告示 + "请求下架"按钮（所有 category 统一只显示"请求下架"，不再加"已出"等后缀）
+- ✅ **请求下架**：`POST /api/v1/goods/:id/request-off-shelf` —— bot 在群里 @ 发布者，**问句必须按 category 分支**（明显区分二手 / 求物品）：
+  - cat=1：`「标题」已经出了吗？请回答是或不是。`
+  - cat=2：`「标题」是否已经求得该物品？请回答是或不是。`
+  
+  均无 goods_id；失败清限流锁；同 (caller, good) 1h 限 1 次。发布者回复关键词识别详见 `orphan.md`
 - 卖家回「是 / 不是 / 已出 / 某某已出」→ 「是、已出、带关键词」走 `off_shelf`；单独「不是 / 没出」不按下架
 
 ### P2c 边界 & 回退
@@ -129,17 +133,16 @@ bot 权限**严格收窄**到 5 类发布动作，所有 app 内交互（评论/
 
 详见 `recognition.md` "Kimi prompt hard rules" 段。
 
-### P3.6 模型可配置 + quota 熔断 + regex 兜底识别
+### P3.6 模型可配置 + quota 熔断 + 冷却期静默
 
 观测到生产日志全是 `exceeded_current_quota_error`，bot 41 小时一次都没成功调过 Kimi。修复：
 
 - ✅ **模型抽 conf**：`Gpt.Model` (env `GPT_MODEL`) + `Gpt.RecognizeModel` (env `GPT_RECOGNIZE_MODEL`)；写死的 `ModelMoonshotV1128K` 改读 conf。默认升级：闲聊用 `moonshot-v1-auto`（按上下文省钱）、识别用 `kimi-k2-0905-preview`（中文识别 + JSON 输出更稳）。go-moonshot SDK 的 `ChatCompletionsModelID` 是 string 别名，可传任意 Moonshot 服务端支持的模型名
 - ✅ **quotaGate 熔断器**：`utils/kimi/quota_gate.go`；连续 ≥ `GPT_QUOTA_ERROR_THRESHOLD`（默认 3）次 quota 错 → 冷却 `GPT_QUOTA_COOLDOWN_SECONDS`（默认 1800）秒，期间 LLM 入口 short-circuit 不再撞 API
-- ✅ **regex 兜底识别**：`utils/kimi/recognize_regex.go`；熔断期间 `auto_reply.go` 退化为正则识别 publish_good + off_shelf；保守严格（仅锚定句式 + 价格强制 + 撤回关键词 hard reject + 价格上限保护）
-- ✅ **ack 文案区分**：regex 兜底产出的 ack 用 "已（关键词识别）上架..." 让用户感知到不是 LLM 识别，附"如不对请回'撤销'"
-- ✅ 单元测试：26 个 case 覆盖 quota gate 状态机 (open/trip/recover/reset) + regex 各类命中 / 拒判 / 边界
+- ✅ **冷却期 / 单次 quota 错：直接静默丢弃**——不做正则兜底（**正则做语义识别不可靠**：动词前缀 / 多义词 / 否定语气会导致 false-positive 错落库，体感比"暂时没识别"差得多）
+- ✅ 单元测试：覆盖 quota gate 状态机（open/trip/recover/reset）
 
-详见 `recognition.md` "LLM 配额熔断 + regex 兜底识别（P3.6）" 段。
+详见 `recognition.md` "LLM 配额熔断 + 静默丢弃（P3.6）" 段。
 
 ### 其他
 

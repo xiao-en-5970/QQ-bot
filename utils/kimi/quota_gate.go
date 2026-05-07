@@ -94,7 +94,7 @@ func (q *quotaGate) RecordResult(err error) {
 // 如果哪天 SDK 暴露强类型错误（typed error）我们改成 errors.Is/As 即可。
 //
 // 暴露给 logic 层使用——quota gate 触发熔断需要 ≥ threshold 次累积，但单条消息不该
-// 被白白 drop；上层检测到 raw quota error 时就该立即走 regex 兜底。
+// 被白白 drop；上层检测到 raw quota error 时同样直接静默（不做兜底，避免错落库）。
 func IsQuotaError(err error) bool {
 	if err == nil {
 		return false

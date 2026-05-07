@@ -268,7 +268,7 @@ type Tools struct {
 //	               默认走 Kimi K2（kimi-k2-0905-preview）。env: GPT_RECOGNIZE_MODEL；留空 = 默认
 //	               设计：识别和闲聊分别配模型——识别要稳准、闲聊用便宜的；运维可独立调
 //	QuotaCooldownSeconds 连续 ≥ QuotaErrorThreshold 次撞 exceeded_current_quota_error 后整个 LLM
-//	               调用层进入冷却 N 秒（期间 short-circuit 不再调 API、退化到 regex 兜底识别）。
+//	               调用层进入冷却 N 秒（期间 short-circuit 不再调 API、当前窗口直接静默丢弃）。
 //	               <=0 时取默认 1800 秒（30 分钟）。env: GPT_QUOTA_COOLDOWN_SECONDS
 //	QuotaErrorThreshold 触发冷却所需的连续 quota 错次数，<=0 时取默认 3。env: GPT_QUOTA_ERROR_THRESHOLD
 type Gpt struct {
@@ -315,6 +315,17 @@ type Internal struct {
 	Port int `mapstructure:"port,omitempty"`
 }
 
+// Bot bot 自身的运营 / 通知配置——跟"对内通知群"相关的开关都集中在这里。
+//
+// OpsGroupID    bot 的"对内通知 / 操作记录"群号；任何上架 / 群接入申请等关键事件都会
+//
+//	转发一份到这个群里，方便运营盯。0 = 不通知，bot 不主动给任何群上报；
+//	生产推荐显式配上一个仅运营可见的 QQ 群号。
+//	env: BOT_OPS_GROUP_ID
+type Bot struct {
+	OpsGroupID int64 `mapstructure:"ops_group_id,omitempty"`
+}
+
 type Config struct {
 	Log      Log      `mapstructure:"log"`
 	Server   Server   `mapstructure:"server"`
@@ -327,6 +338,7 @@ type Config struct {
 	Gpt      Gpt      `mapstructure:"gpt"`
 	Commands Commands `mapstructure:"commands"`
 	Internal Internal `mapstructure:"internal"`
+	Bot      Bot      `mapstructure:"bot"`
 }
 
 // Init 加载配置：YAML（test.yaml） + 环境变量，env 优先级最高。
@@ -492,6 +504,7 @@ func bindEnvKeys() {
 		"gpt.model", "gpt.recognize_model", "gpt.quota_cooldown_seconds", "gpt.quota_error_threshold",
 		"commands.enabled", "commands.default",
 		"internal.port",
+		"bot.ops_group_id",
 	}
 	for _, k := range keys {
 		_ = viper.BindEnv(k)
@@ -563,6 +576,12 @@ func applyDefaults(c *Config) {
 	}
 	if c.Group.AutoReplyMaxWindowSize <= 0 {
 		c.Group.AutoReplyMaxWindowSize = 20
+	}
+
+	// 运维通知群默认值：1084352497（项目当前内部运营群）。生产部署可用
+	// BOT_OPS_GROUP_ID 覆盖；显式置 0 时所有运维通知会被静默忽略。
+	if c.Bot.OpsGroupID == 0 {
+		c.Bot.OpsGroupID = 1084352497
 	}
 }
 

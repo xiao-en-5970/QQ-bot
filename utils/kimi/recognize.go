@@ -22,7 +22,8 @@ import (
 
 // ErrQuotaCooling 是识别入口在 quotaGate 冷却期内 short-circuit 时返回的 sentinel。
 //
-// 调用方（auto_reply）应当用 errors.Is 检测，再决定是退化为 regex 兜底还是直接 drop。
+// 调用方（auto_reply）应当用 errors.Is 检测；当前策略是直接静默丢弃当前窗口——
+// 正则做语义识别不可靠，宁可漏不可错（详见 skill/bot/recognition.md "LLM 配额熔断" 段）。
 // 这条错误**不算** "识别失败" log——是预期内的熔断行为，应该 INFO 级别。
 var ErrQuotaCooling = errors.New("kimi quota gate cooling")
 
@@ -112,12 +113,12 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
 
 | Type | 触发场景 | 关键字段 |
 |---|---|---|
-| publish_good     | 用户卖二手 / 发起有偿求助 / AA 制活动召集 / 拼车拼团。例:"出鞋架6元"、"代课30r"、"出去玩 人均20" | title, price?, negotiable, bargain?, category(1二手/2有偿求助及活动召集), location?, description?, image_message_ids? |
-| publish_question | 用户向群里发起**有信息密度的、值得长期归档到 app 提问区**的提问。例:"有人有形势与政策题库吗"、"问下大家计算机学院XX课在哪买教材"、"3栋热水房几点开" | question_title, question_content?, image_message_ids? |
-| publish_answer   | 用户在回复群里**别人最近**的提问 | answer_hint_to(被回答的提问关键词), answer_content |
+| publish_good     | 用户卖二手 / 发起求物品（求帮做事 / 求物品 / AA / 拼车）。例:"出鞋架6元"、"代课30r"、"出去玩 人均20" | title, price?, negotiable, bargain?, category(1二手 / 2求物品), location?, description?, image_message_ids? |
+| publish_question | 用户向群里发起**有信息密度的、值得长期归档到 app 求解答板块**的提问。例:"有人有形势与政策题库吗"、"问下大家计算机学院XX课在哪买教材"、"3栋热水房几点开" | question_title, question_content?, image_message_ids? |
+| publish_answer   | 用户在回复群里**别人最近**的求解答 | answer_hint_to(被回答的提问关键词), answer_content |
 | off_shelf        | 用户表示自己之前的商品已经卖出/不卖了。例:"已出"、"鞋架已出"、"不卖了" | off_shelf_hint(关键词，没指明就空字符串) |
-| close_question   | 用户表示自己之前的提问已经解决/不需要了。例:"已找到"、"题库已找到" | close_question_hint |
-| seek_goods       | 用户**想买**二手：明确「收 / 求购 / 收购」+ 物品名。例:"收鞋架"、"收「U型枕」"、"求购鼠标"、"收购教材"。**不要**把「收到」「收起」「收录」「收尾」等当成求购 | seek_hint(物品关键词，必填且具体) |
+| close_question   | 用户表示自己之前的求解答已经解决/不需要了。例:"已找到"、"题库已找到" | close_question_hint |
+| seek_goods       | 用户**想买/想求**某物（**没给具体价**）："收鞋架"、"收「U型枕」"、"求购鼠标"、"收购教材"、"求数值分析PPT"、"求高数复习题"。**dispatch 端会**：① 搜本校在售给提示，② 当作「求物品 + 0 元（前端不展示价格）」帮 ta 上架。**不要**把「收到」「收起」「收录」「收尾」当求购；用户已经给了价（"求 X 5r"）→ 走 publish_good cat=2 而非 seek_goods | seek_hint(物品关键词，必填且具体) |
 | none             | 闲聊 / 噪声 / 模糊不清 / 信息不全到没法落库 | reason 给一句话说明判定理由 |
 
 ## 关键规则
@@ -134,25 +135,33 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
    - 关联原则：图片归到**时间上最近的、且语义相关**的那条文字描述上，**不限制方向**（图在前后都行）。
    - 找不到关联文字的孤立图片不要单独形成动作（type=none，reason 写"孤立图片无业务文本"）。
    - 同一动作可关联多张连续图（一个商品多张实拍）。
-6. **价格判定**:
+6. **价格判定**（区分"明确面议" vs "完全没说价"）:
    - 明确数字（"6元"、"15r"、"6 块"）→ price = 6.0；negotiable=false
    - 明确「0」「0元」「免费」「白送」「不要钱」「无偿」→ price = 0.0；negotiable=false（≠ 面议）
-   - 写了"面议"、"看心情"、"私聊价"、**完全没说价** → price 字段不输出；negotiable=true
+   - 用户**显式**写了"面议"、"看心情"、"私聊价"、"价格私"等 → price 字段不输出；**negotiable=true**
+   - **完全没说价**（既没数字也没"面议"等关键词）：
+     - **category=1（二手）**：默认 negotiable=true，price 不输出（卖东西没标价默认让人私聊）
+     - **category=2（求物品）**：**price 不输出**，**negotiable=false**（dispatch 当 0 元处理，前端不展示价格、不挂"有偿"tag）
    - 区间价（"5-10"）→ 取下限作为 price，description 里说明"5-10元"，negotiable=false
    - 「可刀」「可小刀」「刀」「让刀」等表示接受砍价 → bargain=true（可与明码标价同时为 true）
 7. **category 判定**:
 
-   category=1 = "卖东西/出东西板块"——发布者把**自己持有的东西**给别人，换钱。
-   category=2 = "有偿求助 / 多人协作板块"——发布者**付钱**让别人帮忙做事 / 大家分摊。
+   category=1 = "二手板块"——发布者把**自己持有的东西**给别人，换钱。
+   category=2 = "求物品板块（含求物 / 求帮做事 / AA / 拼车）"——发布者求一件东西或求人帮忙；
+              带价 = 有偿；不带价 = 单纯求物。
 
    **强信号关键字（**硬规则**）**：
 
    - 发布者**主动**说"出 XX"、"卖 XX"、"转让 XX"、"赠/送（带价格）" → **必然** category=1，
      无论 XX 是不是传统二手物品（汤粉 / 自制食物 / 票 / 闲置全 OK）
    - 发布者主动说"代 XX"、"求代 XX"、"找人 XX"、"求帮 XX 多少钱" → **必然** category=2
+   - **隐式上架（默认 category=1）**：图片 + 物品名 + 价格组合（"[图片]\n笔记本支架臂，50r"、
+     "[图片] 雀巢咖啡 30 元"），但句子里**没有**任何"求 / 代 / 拼 / 收 / 买"等求助方动词，
+     **必然** category=1——这是用户在晒自己的东西+标价的典型卖家样式，不要错判为 category=2。
+     即便没有图，纯文字"物品名 + 价格"且没有动词前缀（"按压U型枕 5元"），也按 category=1 处理。
 
    分歧来源：**"卖食物"也是 category=1**。"出一碗汤粉 8r"、"卖自制蛋糕"、"转让多余水果"
-   都是发布者把现成的东西给别人，是 category=1，**不是**有偿求助。
+   都是发布者把现成的东西给别人，是 category=1，**不是**求物品。
    "求代取一份汤粉 5r" / "代点食堂二楼汤粉" 才是 category=2（"我没汤粉，找人帮我搞来"）。
 
    category=2 具体覆盖：
@@ -220,9 +229,13 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
    - 用户提到的地点直接抄进去（"新区"、"39栋下铺"、"南区门口"等）
    - 没提就空字符串
 10. **off_shelf_hint / close_question_hint**:
-    - 用户明确说哪个商品已出（"鞋架已出"）→ hint 写"鞋架"
-    - 用户没指明（"已出"、"已找到"、"是" 表示已卖出）→ hint 写空字符串；bot 后续会反问消歧
-    - 用户明确否定未出（"不是"、"没出"、"还在"）→ type=none，不要 off_shelf
+    - 用户明确说哪个商品已出 / 已求得（"鞋架已出"、"教材已求到"）→ hint 写"鞋架"/"教材"
+    - 用户没指明（短句单独成立："已出"、"已找到"、"求到了"、"已求得"、"已买到"、"是" 表示已卖出/已求到）→ hint 写空字符串；bot 后续反问消歧
+    - 用户明确否定未出（"不是"、"没出"、"还没求到"、"还需要"）→ type=none，不要 off_shelf
+    - **二手 vs 求物品 关键词差异**（用户回复 bot 的"请求下架"问句时）：
+      - 二手（cat=1）→ 已出 / 出掉了 / 是
+      - 求物品（cat=2）→ 已找到 / 找到了 / 已求到 / 求到了 / 已求得 / 已买到 / 是
+      - 两类都映射到同一个 off_shelf action（hfut 后端按 good 自身的 category 决定下架 / 关闭求购）
 11. **time 字段**只是辅助你判断"刚才发"和"几分钟前发"的时间感，不要在输出里复读时间。
 12. **source_message_ids**: 每个 action 必填，列出所有用于这次判定的消息 ID（含主文本 + 关联图片）。
 13. **多图 / 文字主导原则**（适用于所有 type，不仅 publish_question）:
@@ -233,25 +246,36 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
       - "[图1] 看看"、"[图1] 这个怎么样"（短互动，无具体诉求）
     - 正确处理：图片归到最近的、带具体诉求的那条文字；找不到归属的图片**不要**单独形成 action。
 
-14. **撤回 / 改主意**（Hard reject 列表）:
+14. **撤回 / 改主意 / 取消**:
 
-    用户在同一窗口里**先说要发布、紧接着改主意撤回**——不要识别为 publish_*：
+    分两类：
 
-    - "算了不卖了"、"刚才那个不算"、"忽略我刚才说的"、"撤回上一条" → 全段 type=none，reason 写"用户撤回上一条意图"。
-    - 如果撤回前的诉求确实是"已发布过的商品/提问"——那是 off_shelf / close_question，按已有规则识别。
-    - 不要替用户做"撤回 + 重新上架"这种二步操作；只识别用户**最终**留下的诉求。
+    a) **Hard reject**（窗口内先发布后撤回）——用户**当前**这次发言里既包含发布意图、又紧接着改主意撤回：
+
+       - "算了不卖了"、"刚才那个不算"、"忽略我刚才说的"、"撤回上一条"、"算了改主意了" 等 → 全段 type=none，reason 写"用户撤回上一条意图"
+       - 不要替用户做"撤回 + 重新上架"这种二步操作；只识别用户**最终**留下的诉求
+
+    b) **Standalone 撤销**（用户**只**发了这几个字，没新的发布意图）——映射为 off_shelf：
+
+       - 单独短句 "不要了" / "不卖了" / "不出了" / "不需要了" → type=**off_shelf**，off_shelf_hint=空字符串
+       - 语义：撤销 ta 自己最近一次成功上架/求物品（bot 会用 hint=空 + 最近发布上下文找到具体那条）
+       - 用户回到 cat=1（二手）：意为"我刚才说要卖的不卖了" → off_shelf
+       - 用户回到 cat=2（求物品）：意为"我刚才求的不需要了" → 同样 off_shelf（dispatch 端按 good 自身 category 处理）
+
+    c) 历史已发布商品的撤销（"鞋架已出"、"题库已找到"、"教材已求到"）按规则 10 走 off_shelf，已经覆盖。
 
 15. **不指代具体物品的"出"语句**（防误识别）:
 
     - "出了" / "都出了" / "拿出来" / "出门" 这些**没有商品名 + 没有价格**的句子，**不**算 publish_good 也不算 off_shelf。
     - 真要识别为 off_shelf 至少需要：商品名 / 类目词 / "刚才那个" 等明确指代之一。
 
-16. **seek_goods（求购检索）**:
+16. **seek_goods（求物品，未给价）**:
 
-    - 必须像「想买二手」：含 **收/求购/收购** 且后面跟**具体物品名**（至少 2 字或明确名词）。seek_hint 只写物品名，不要写动词。
+    - 触发词：**收 / 收购 / 求购 / 求** + **具体物品名**（至少 2 字或明确名词）。seek_hint 只写物品名，不要带动词。
+    - 用户已经写了价（如 "求 X 5r"、"收 X 10元"） → **走 publish_good cat=2** 而不是 seek_goods（让 price 字段生效，前端会挂"有偿"tag）。
     - **Hard reject**：「收到」「收到了」「收起」「收录」「收尾」等明显不是求购 → type=none。
-    - 与 publish_good 互斥：用户同时在卖东西（出/卖+价）→ 不要 seek_goods。
-    - 本动作**不落库**，bot 只在平台有在售匹配时 @ 用户给提示。
+    - 与 publish_good(category=1) 互斥：用户在卖东西（出/卖+价）→ 不要 seek_goods。
+    - dispatch 端会**同时**做：① 搜本校在售给提示；② 当作"求物品 cat=2、price=0、negotiable=false"帮 ta 上架（前端不展示价格、也不挂"有偿"tag）。
 
 ## 输出格式（严格 JSON，不要任何额外内容）
 
@@ -278,13 +302,14 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
 // 调用方应当保证 k != nil；nil 接收者会 panic。
 //
 // 错误模式：
-//   - ErrQuotaCooling：quotaGate 处于冷却期，未实际调 API；上层应改走 RecognizeViaRegex 兜底
+//   - ErrQuotaCooling：quotaGate 处于冷却期，未实际调 API；上层应当**直接静默**，不要做语义兜底
+//     （正则做语义识别不可靠，会污染落库数据；宁可漏不可错）
 //   - 其它 error：网络 / API / parse 错——上层应 ack=fail（normal 模式静默）
 func (k *Kimi) RecognizeBusinessActions(ctx context.Context, input RecognizeInput) (*RecognizeResult, error) {
 	if k == nil {
 		return nil, errors.New("kimi 未启用")
 	}
-	// 进入 quota 冷却期则 short-circuit——不再撞 API、让上层走 regex 兜底
+	// 进入 quota 冷却期则 short-circuit——不再撞 API、由上层直接静默丢弃
 	if blocked, _ := globalQuotaGate.IsBlocked(); blocked {
 		return nil, ErrQuotaCooling
 	}

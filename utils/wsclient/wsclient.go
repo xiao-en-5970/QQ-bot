@@ -10,8 +10,10 @@
 // 协议要点（OneBot11 标准 + NapCat 扩展）：
 //   - 服务端是 NapCat（websocketServers 配置开启），bot 作为客户端 dial 过去
 //   - 鉴权头 `Authorization: Bearer <access_token>`，token 留空则不带
-//   - 服务端推 JSON 文本帧；我们只关心 post_type=message && message_type=group
-//   - 其它事件（meta_event 心跳、notice、API 响应回包、private message 等）一律忽略
+//   - 服务端推 JSON 文本帧；我们处理两类业务事件：
+//   - post_type=message && message_type=group   → logic.HandleAtMessage
+//   - post_type=message && message_type=private → logic.HandlePrivateMessage
+//   - 其它事件（meta_event 心跳、notice、API 响应回包等）一律忽略
 package wsclient
 
 import (
@@ -144,19 +146,31 @@ func handleEvent(client *http.Client, raw []byte) {
 		return
 	}
 
-	// 我们只处理群消息事件。
-	// 心跳 / API 响应 / notice / private message / 其它 OneBot 事件全部忽略。
-	if hdr.PostType != "message" || hdr.MessageType != "group" {
+	// 业务事件分流：群消息走 HandleAtMessage，私聊走 HandlePrivateMessage。
+	// 其它（心跳 / API 响应 / notice 等）一律忽略。
+	if hdr.PostType != "message" {
 		zaplog.Logger.Debugf("WebSocket 事件忽略: post_type=%s message_type=%s", hdr.PostType, hdr.MessageType)
 		return
 	}
-
-	var msg model.Message
-	if err := json.Unmarshal(raw, &msg); err != nil {
-		zaplog.Logger.Errorf("WebSocket 群消息反序列化失败: %v, raw=%s", err, truncate(string(raw), 256))
-		return
+	switch hdr.MessageType {
+	case "group":
+		var msg model.Message
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			zaplog.Logger.Errorf("WebSocket 群消息反序列化失败: %v, raw=%s", err, truncate(string(raw), 256))
+			return
+		}
+		logic.HandleAtMessage(client, &msg)
+	case "private":
+		var msg model.Message
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			zaplog.Logger.Errorf("WebSocket 私聊消息反序列化失败: %v, raw=%s", err, truncate(string(raw), 256))
+			return
+		}
+		// 不阻塞 ws 读循环；NapCat API 调用 + 群转发会在子协程里同步走
+		go logic.HandlePrivateMessage(client, &msg)
+	default:
+		zaplog.Logger.Debugf("WebSocket 事件忽略: post_type=%s message_type=%s", hdr.PostType, hdr.MessageType)
 	}
-	logic.HandleAtMessage(client, &msg)
 }
 
 func truncate(s string, n int) string {

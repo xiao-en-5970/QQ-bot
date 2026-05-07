@@ -145,11 +145,11 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 
 ---
 
-## LLM 配额熔断 + regex 兜底识别（P3.6）
+## LLM 配额熔断 + 静默丢弃（P3.6）
 
 ### 动机
 
-观测到生产 ak quota 耗尽时（`exceeded_current_quota_error`），bot 仍然**每条新消息都死撞 Moonshot API**，41 小时刷出 60+ 条 ERROR 日志、浪费 RTT、淹没真问题；同时所有窗口 flush 都直接 ERROR 返回，群里业务消息**完全识别不到**。
+观测到生产 ak quota 耗尽时（`exceeded_current_quota_error`），bot 仍然**每条新消息都死撞 Moonshot API**，41 小时刷出 60+ 条 ERROR 日志、浪费 RTT、淹没真问题。
 
 ### quotaGate 熔断器（`utils/kimi/quota_gate.go`）
 
@@ -159,34 +159,17 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 - 冷却到点自动恢复（lazy 检查时间戳，不起 goroutine）
 - 熔断瞬间打一行 WARN log，期间静默——不再每条消息都打 ERROR
 
-### regex 兜底识别（`utils/kimi/recognize_regex.go`）
+### 冷却期 / 单次 quota 错：直接静默
 
-熔断期间 `auto_reply.go` 调 `kimi.RecognizeViaRegex(input)` 退化识别，**仅识别少量高置信度场景**：
+**`auto_reply.go` 收到 `ErrQuotaCooling` 或 `IsQuotaError` 一律 `return`**——不做任何兜底识别。
 
-| 模式 | 命中正则 | 命中样例 | 不命中样例 |
-|---|---|---|---|
-| publish_good 二手 | `^\s*(?:出\|卖)\s*<标题>\s*<价格>\s*[元r块￥]` | "出三层鞋架 6元"、"卖自行车 200块" | "出门"、"出鞋架"（无价、且无「面议」） |
-| publish_good 二手·面议 | `...<标题>\s*面议...\s*$` | "出鞋架 面议"、"卖自行车 面议" | 同上 hard rule 15 |
-| publish_good 求助 | `^\s*(?:代\|求人\|拼\|求带)\s*<标题>\s*<价格>` | "代课 30r"、"拼车去机场 30元" | "求 经验"、"求 资源" |
-| publish_good 求助·面议 | `...\s*面议...\s*$` | "代取快递 面议" | — |
-| off_shelf 短句 | `^\s*(?:已出\|已找到\|出掉了)\s*[!！.]?\s*$` | "已出"、"已找到" | "快乐出门去玩了" |
-| off_shelf 带 hint | `<物品> 已出` 或 `已出 <物品>` | "鞋架已出"、"已出鞋架" | — |
+为什么不做正则兜底：
 
-**保守原则**（对应 prompt hard rules）：
-
-- hard rule 14：含撤回 / 改主意关键词（`算了`、`不卖了`、`刚才那个不算`、`忽略我刚才`）整条 input 直接 drop
-- hard rule 15：纯"出"无标题无价格的句子（`出了`、`都出了`、`出门`）一律 drop
-- 价格上限保护：二手 100w 元 / 求助 10w 元，超过的视为误识别
-- 纯图片消息 `[图片]` 不参与识别
-- 仅识别 `publish_good` + `off_shelf`；问答类（`publish_question` / `publish_answer` / `close_question`）正则误判率太高一律 drop
-
-### ack 文案区分
-
-regex 兜底识别结果的 `Confidence` 固定为 `0.6`（vs LLM 的 0.0~1.0 浮动）。`auto_reply_dispatch.go` 在 ack 文案上**显式区分**：
-
-- LLM 路径：`上架成功 二手「鞋架」 6 元，食堂，配图 2 张`
-- regex 兜底：同上并在末尾 `（兜底识别，不对说撤销）`
-
-让用户感知"现在是兜底模式"，撤销路径靠现有"撤回 hard reject" + "@bot 下架"。
+- **正则做语义识别不可靠**——动词前缀 / 数字识别 / 多义词 / 否定语气全是坑，false-positive 会把
+  闲聊错落库成商品 / 求物品；用户体感比"暂时没识别"差得多。
+- 配额耗尽通常 30 分钟～小时级恢复，宁可少识别一点也不要错落库；运营侧靠
+  ops 群的 `[ops] 上架` 转发能立即发现"群里没动静"，及时充值。
+- 撤销 / 关闭 等高频"短句"业务（`不要了 / 已出 / 已找到 / 求到了`）由 Kimi 走窗口
+  化识别已经足够稳；让 bot 在冷却期完全闭嘴，不引入半吊子识别。
 
 文案原则：**不暴露专业 ID/技术字段**（goods_id、article_id 等）——用户在 app 里能看到自己刚发的内容，回执只确认"做了什么 + 关键属性"。详见 `skill/bot/verbosity.md`。

@@ -255,18 +255,16 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 	case err == nil:
 		// 正常路径——result 来自 Kimi
 	case errors.Is(err, kimi.ErrQuotaCooling):
-		// quota gate 冷却期：退化到 regex 兜底（保守识别，仅 publish_good + off_shelf）
-		zaplog.Logger.Infof("autoReply group=%d user=%d Kimi quota 冷却中 → regex 兜底识别",
+		// quota gate 冷却期：直接静默（正则做语义识别不可靠，宁可漏不可错）
+		zaplog.Logger.Infof("autoReply group=%d user=%d Kimi quota 冷却中，静默丢弃当前窗口",
 			key.GroupID, key.UserID)
-		result = kimi.RecognizeViaRegex(input)
+		return
 	case kimi.IsQuotaError(err):
-		// 单次 quota error——quota_gate 还没累积到阈值（默认连续 3 次才正式冷却），但当前
-		// 这条消息不该白白被 drop。立即走 regex 兜底；quota_gate 会持续累计，到阈值后正式
-		// short-circuit 后续 API 调用。
-		// 日志降级 ERROR → WARN，避免运行时配额耗尽时刷屏。
-		zaplog.Logger.Warnf("autoReply group=%d user=%d Kimi 配额耗尽（单次） → regex 兜底识别（请尽快充值 / 换 API key）",
+		// 单次 quota error——quota_gate 持续累计到阈值后会进入正式冷却。当前这条消息直接静默
+		// 不做识别——配额耗尽该停就停，避免任何低置信度兜底污染落库数据。
+		zaplog.Logger.Warnf("autoReply group=%d user=%d Kimi 配额耗尽（单次），静默丢弃当前窗口（请尽快充值 / 换 API key）",
 			key.GroupID, key.UserID)
-		result = kimi.RecognizeViaRegex(input)
+		return
 	default:
 		zaplog.Logger.Errorf("autoReply 识别失败 group=%d user=%d: %v", key.GroupID, key.UserID, err)
 		return
@@ -364,13 +362,13 @@ func buildAckMessage(a kimi.RecognizeAction) string {
 	case "publish_good":
 		category := "二手"
 		if a.Category == 2 {
-			category = "有偿求助"
+			category = "求物品"
 		}
 		return fmt.Sprintf("%s「%s」暂不可发布，稍后再试",
 			category, orPlaceholder(a.Title, "未命名"))
 
 	case "publish_question":
-		return fmt.Sprintf("提问「%s」暂不可发，稍后再试",
+		return fmt.Sprintf("求解答「%s」暂不可发，稍后再试",
 			orPlaceholder(a.QuestionTitle, "未命名"))
 
 	case "publish_answer":
@@ -382,11 +380,11 @@ func buildAckMessage(a kimi.RecognizeAction) string {
 		return fmt.Sprintf("下架「%s」暂不可用，稍后再试", hint)
 
 	case "close_question":
-		hint := orPlaceholder(a.CloseQuestionHint, "提问")
+		hint := orPlaceholder(a.CloseQuestionHint, "求解答")
 		return fmt.Sprintf("关闭「%s」暂不可用，稍后再试", hint)
 
 	case "seek_goods":
-		return fmt.Sprintf("求购「%s」暂不可检索，稍后再试",
+		return fmt.Sprintf("求物品「%s」暂不可发布，稍后再试",
 			orPlaceholder(a.SeekHint, "物品"))
 
 	default:
