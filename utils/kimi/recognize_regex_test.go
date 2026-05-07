@@ -18,15 +18,17 @@ func singleMsg(text string) RecognizeInput {
 
 func TestRegex_PublishGood_SecondHand(t *testing.T) {
 	cases := []struct {
-		text      string
-		wantTitle string
-		wantPrice float64
+		text          string
+		wantTitle     string
+		wantPrice     float64
+		wantBargain   bool
 	}{
-		{"出三层鞋架 6元", "三层鞋架", 6},
-		{"出 按压U型枕 5 元", "按压U型枕", 5},
-		{"卖自行车 200块", "自行车", 200},
-		{"出鞋架 6r", "鞋架", 6},
-		{"  出  老物件  18.5 元  ", "老物件", 18.5},
+		{"出三层鞋架 6元", "三层鞋架", 6, false},
+		{"出 按压U型枕 5 元", "按压U型枕", 5, false},
+		{"卖自行车 200块", "自行车", 200, false},
+		{"出鞋架 998元 可刀", "鞋架", 998, true},
+		{"出鞋架 6r", "鞋架", 6, false},
+		{"  出  老物件  18.5 元  ", "老物件", 18.5, false},
 	}
 	for _, c := range cases {
 		t.Run(c.text, func(t *testing.T) {
@@ -43,6 +45,9 @@ func TestRegex_PublishGood_SecondHand(t *testing.T) {
 			}
 			if a.Price == nil || *a.Price != c.wantPrice {
 				t.Errorf("price = %v, want %v", a.Price, c.wantPrice)
+			}
+			if a.Bargain != c.wantBargain {
+				t.Errorf("bargain = %v, want %v", a.Bargain, c.wantBargain)
 			}
 			if a.Category != 1 {
 				t.Errorf("category = %d, want 1", a.Category)

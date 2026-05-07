@@ -179,6 +179,7 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 		Content:    strings.TrimSpace(a.Description),
 		Category:   int16(a.Category),
 		Negotiable: negotiable,
+		Bargain:    a.Bargain,
 		Price:      priceCents,
 		Location:   strings.TrimSpace(a.Location),
 		Images:     images,

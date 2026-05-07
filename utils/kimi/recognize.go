@@ -68,6 +68,7 @@ type RecognizeAction struct {
 	Description string   `json:"description,omitempty"` // 详细描述（可长）
 	Price       *float64 `json:"price,omitempty"`       // 价格；nil 视为未提供（配合 Negotiable）
 	Negotiable  bool     `json:"negotiable,omitempty"`  // true = 未说价或明确「面议」；与 price=0 免费送不同
+	Bargain     bool     `json:"bargain,omitempty"`     // 可刀：文案含「可刀」「刀」等（与面议独立）
 	Category    int      `json:"category,omitempty"`    // 1=二手 2=有偿求助
 	Location    string   `json:"location,omitempty"`    // 地点（"新区" / "下铺" / 见面地等）；没明确就空
 
@@ -107,7 +108,7 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
 
 | Type | 触发场景 | 关键字段 |
 |---|---|---|
-| publish_good     | 用户卖二手 / 发起有偿求助 / AA 制活动召集 / 拼车拼团。例:"出鞋架6元"、"代课30r"、"出去玩 人均20" | title, price?, negotiable, category(1二手/2有偿求助及活动召集), location?, description?, image_message_ids? |
+| publish_good     | 用户卖二手 / 发起有偿求助 / AA 制活动召集 / 拼车拼团。例:"出鞋架6元"、"代课30r"、"出去玩 人均20" | title, price?, negotiable, bargain?, category(1二手/2有偿求助及活动召集), location?, description?, image_message_ids? |
 | publish_question | 用户向群里发起**有信息密度的、值得长期归档到 app 提问区**的提问。例:"有人有形势与政策题库吗"、"问下大家计算机学院XX课在哪买教材"、"3栋热水房几点开" | question_title, question_content?, image_message_ids? |
 | publish_answer   | 用户在回复群里**别人最近**的提问 | answer_hint_to(被回答的提问关键词), answer_content |
 | off_shelf        | 用户表示自己之前的商品已经卖出/不卖了。例:"已出"、"鞋架已出"、"不卖了" | off_shelf_hint(关键词，没指明就空字符串) |
@@ -133,6 +134,7 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
    - 明确「0」「0元」「免费」「白送」「不要钱」「无偿」→ price = 0.0；negotiable=false（≠ 面议）
    - 写了"面议"、"看心情"、"私聊价"、**完全没说价** → price 字段不输出；negotiable=true
    - 区间价（"5-10"）→ 取下限作为 price，description 里说明"5-10元"，negotiable=false
+   - 「可刀」「可小刀」「刀」「让刀」等表示接受砍价 → bargain=true（可与明码标价同时为 true）
 7. **category 判定**:
 
    category=1 = "卖东西/出东西板块"——发布者把**自己持有的东西**给别人，换钱。
@@ -248,6 +250,7 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
     "title": "三层鞋架",
     "price": 6.0,
     "negotiable": false,
+    "bargain": false,
     "category": 1,
     "location": "",
     "image_message_ids": [10001],

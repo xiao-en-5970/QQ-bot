@@ -106,7 +106,7 @@ func RecognizeViaRegex(input RecognizeInput) *RecognizeResult {
 		}
 
 		if act, ok := tryPublishGood(text, msg.MessageID); ok {
-			out.Actions = append(out.Actions, act)
+			out.Actions = append(out.Actions, applyBargainFromText(text, act))
 			continue
 		}
 		if act, ok := tryOffShelf(text, msg.MessageID); ok {
@@ -121,6 +121,17 @@ func RecognizeViaRegex(input RecognizeInput) *RecognizeResult {
 //
 // 多行换行会被合并成单空格（让上面的"^...$"行锚定还能工作）；图片段位置记号
 // "[图片]" 也丢掉（regex 兜底只看文字）。
+// applyBargainFromText 文案含「可刀」等时打上 bargain（保守：不匹配孤立「刀」字以免误伤）
+func applyBargainFromText(text string, act RecognizeAction) RecognizeAction {
+	for _, kw := range []string{"可刀", "可小刀", "刀一下", "让刀", "可议价"} {
+		if strings.Contains(text, kw) {
+			act.Bargain = true
+			break
+		}
+	}
+	return act
+}
+
 func joinSegmentsForRegex(segs []string) string {
 	parts := make([]string, 0, len(segs))
 	for _, s := range segs {

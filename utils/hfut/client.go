@@ -190,6 +190,7 @@ type PublishGoodReq struct {
 	Content    string   `json:"content"`
 	Category   int16    `json:"category"`   // 1=二手 2=有偿求助/AA活动
 	Negotiable bool     `json:"negotiable"` // true 时 Price 被忽略，前端展示"面议"
+	Bargain    bool     `json:"bargain"`    // 可刀
 	Price      int      `json:"price"`      // 单位：分
 	Location   string   `json:"location"`
 	Images     []string `json:"images"`
