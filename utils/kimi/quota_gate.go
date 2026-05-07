@@ -61,7 +61,7 @@ func (q *quotaGate) RecordResult(err error) {
 		q.consecutiveErrors = 0
 		return
 	}
-	if !isQuotaError(err) {
+	if !IsQuotaError(err) {
 		// 非 quota 错（网络抖、moonshot 5xx、JSON parse 失败等）不算进来——避免把
 		// 偶发问题升级成全局熔断
 		q.consecutiveErrors = 0
@@ -88,11 +88,14 @@ func (q *quotaGate) RecordResult(err error) {
 	}
 }
 
-// isQuotaError 判断 err 是否是 Moonshot 配额耗尽错误。
+// IsQuotaError 判断 err 是否是 Moonshot 配额耗尽错误。
 //
 // Moonshot 错误格式：`[exceeded_current_quota_error]Your project ...`，所以走字符串匹配。
 // 如果哪天 SDK 暴露强类型错误（typed error）我们改成 errors.Is/As 即可。
-func isQuotaError(err error) bool {
+//
+// 暴露给 logic 层使用——quota gate 触发熔断需要 ≥ threshold 次累积，但单条消息不该
+// 被白白 drop；上层检测到 raw quota error 时就该立即走 regex 兜底。
+func IsQuotaError(err error) bool {
 	if err == nil {
 		return false
 	}

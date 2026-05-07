@@ -122,9 +122,9 @@ func TestIsQuotaError(t *testing.T) {
 		{errors.New("[invalid_authentication_error]wrong key"), false},
 	}
 	for _, c := range cases {
-		got := isQuotaError(c.err)
+		got := IsQuotaError(c.err)
 		if got != c.quota {
-			t.Errorf("isQuotaError(%v) = %v; want %v", c.err, got, c.quota)
+			t.Errorf("IsQuotaError(%v) = %v; want %v", c.err, got, c.quota)
 		}
 	}
 }

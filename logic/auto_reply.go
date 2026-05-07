@@ -242,6 +242,14 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 		zaplog.Logger.Infof("autoReply group=%d user=%d Kimi quota 冷却中 → regex 兜底识别",
 			key.GroupID, key.UserID)
 		result = kimi.RecognizeViaRegex(input)
+	case kimi.IsQuotaError(err):
+		// 单次 quota error——quota_gate 还没累积到阈值（默认连续 3 次才正式冷却），但当前
+		// 这条消息不该白白被 drop。立即走 regex 兜底；quota_gate 会持续累计，到阈值后正式
+		// short-circuit 后续 API 调用。
+		// 日志降级 ERROR → WARN，避免运行时配额耗尽时刷屏。
+		zaplog.Logger.Warnf("autoReply group=%d user=%d Kimi 配额耗尽（单次） → regex 兜底识别（请尽快充值 / 换 API key）",
+			key.GroupID, key.UserID)
+		result = kimi.RecognizeViaRegex(input)
 	default:
 		zaplog.Logger.Errorf("autoReply 识别失败 group=%d user=%d: %v", key.GroupID, key.UserID, err)
 		return

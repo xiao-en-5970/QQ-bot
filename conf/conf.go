@@ -1,17 +1,38 @@
 package conf
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"syscall"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 )
 
+// Cfg 是全局配置——读侧直接 conf.Cfg.X 即可，无需加锁。
+//
+// 热更新机制（参考 HFUT 后端 `app/config/config.go`）：
+//   - yaml 文件变化 → viper.WatchConfig 自动触发 reload
+//   - SIGHUP 信号 → 显式触发 reload（kill -HUP <pid>）
+//   - reload 时整体 Unmarshal 到临时 `newCfg`、applyDefaults、再一次性赋值给 Cfg
+//
+// 字段级原子性：Go struct 整体赋值不保证多字段原子可见，但所有字段都是
+// string/int/slice 类型，单字段读单字段写不会撕裂；reload 频率极低（人工触发 / 文件改动），
+// 业务读到"半新半旧"的窗口实际只有 µs 级，可接受不加锁。
+//
+// 想要严格快照请用 conf.Snapshot()，它在写锁保护下返回一份深拷贝。
 var Cfg Config
+
+// cfgMu 写锁——只在 reload 路径上拿；读侧不加锁（见 Cfg 注释）。
+var cfgMu sync.Mutex
 
 // Server 对应 NapCat 的 OneBot11 HTTP / WebSocket 接口配置。
 //
@@ -273,8 +294,8 @@ type Gpt struct {
 //     （env BOT_SERVICE_JWT_SECRET）；两个 env 名不同但值相同
 //   - 调用方每次自签 60s 有效期 JWT 放 X-Service-Token 头
 //   - 接收方靠 iss 区分调用方向：
-//       bot → hfut：iss = "HFUT-Graduation-Project-bot"
-//       hfut → bot：iss = "HFUT-Graduation-Project-hfut"
+//     bot → hfut：iss = "HFUT-Graduation-Project-bot"
+//     hfut → bot：iss = "HFUT-Graduation-Project-hfut"
 //     这样即便 secret 共享，两个方向的 token 也不能互换使用
 //   - HFUT_API_JWT_SECRET 为空 → server 整体不启动（安全降级）
 //
@@ -317,6 +338,8 @@ type Config struct {
 //
 // 生产部署（Docker）通常不挂 yaml，全部走环境变量（HFUT 模式：宿主机 /qq-bot-server/.env -> --env-file）。
 // 本地开发（Windows）继续用 ./test.yaml 即可，env 不存在时不会覆盖。
+//
+// 热更新：调用 WatchAndReload(ctx) 即可在 yaml 变化或收到 SIGHUP 时自动 reload。
 func Init() (err error) {
 	viper.SetConfigName("test")
 	viper.SetConfigType("yaml")
@@ -337,16 +360,116 @@ func Init() (err error) {
 		// 没找到 yaml 也 OK，全部从 env 读
 	}
 
-	if err = viper.Unmarshal(&Cfg); err != nil {
+	return reloadFromViper(false)
+}
+
+// Reload 从已注册到 viper 的 yaml 路径 + 当前进程 env 重新解析配置，整体替换 Cfg。
+//
+// 调用场景：
+//   - viper 文件 watcher 检测到 yaml 改动（自动）
+//   - 进程收到 SIGHUP（kill -HUP <pid>）
+//   - 测试 / 调试时显式手工触发
+//
+// 安全性：
+//   - 用临时 newCfg 完成解析、defaults、normalize 后才写回 Cfg，失败不会污染当前 Cfg
+//   - User.UserID / Group.GroupID 是 main 启动时运行时探测的（NapCat /get_login_info、/get_group_list），
+//     reload 不应覆盖；这里显式保留旧值
+//   - cfgMu 串行化写——多个 reload 并发触发时（比如 yaml 改两次 + 一个 SIGHUP）互不冲突
+func Reload() error {
+	if err := viper.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			return fmt.Errorf("reload 读 yaml 失败: %w", err)
+		}
+		// yaml 不存在也 OK，env 仍然能 reload
+	}
+	return reloadFromViper(true)
+}
+
+// reloadFromViper 是 Init/Reload 共用的"viper → Cfg" 解析逻辑。
+//
+// preserveRuntime=true 时保留 main 启动期填进 Cfg 的运行时字段（User.UserID/Group.GroupID）；
+// 首次 Init 没有运行时字段所以传 false。
+func reloadFromViper(preserveRuntime bool) error {
+	var newCfg Config
+	if err := viper.Unmarshal(&newCfg); err != nil {
 		return fmt.Errorf("无法解析配置: %w", err)
 	}
-
-	if Cfg.Server.Address != "" && !strings.HasSuffix(Cfg.Server.Address, "/") {
-		Cfg.Server.Address = Cfg.Server.Address + "/"
+	if newCfg.Server.Address != "" && !strings.HasSuffix(newCfg.Server.Address, "/") {
+		newCfg.Server.Address = newCfg.Server.Address + "/"
 	}
+	applyDefaults(&newCfg)
 
-	applyDefaults(&Cfg)
+	cfgMu.Lock()
+	defer cfgMu.Unlock()
+	if preserveRuntime {
+		if newCfg.User.UserID == nil {
+			newCfg.User.UserID = Cfg.User.UserID
+		}
+		if len(newCfg.Group.GroupID) == 0 {
+			newCfg.Group.GroupID = Cfg.Group.GroupID
+		}
+	}
+	Cfg = newCfg
 	return nil
+}
+
+// Snapshot 返回当前配置的深拷贝快照，需要"瞬时一致" 的调用方用。
+//
+// 普通调用直接 conf.Cfg.X 即可——string/int/slice 字段单读不会撕裂。
+func Snapshot() Config {
+	cfgMu.Lock()
+	defer cfgMu.Unlock()
+	// Config 内嵌结构体都按值传递（slice/map 浅拷贝），对 reload 后的 read-only 使用足够
+	return Cfg
+}
+
+// WatchAndReload 启动两条热更新通道：
+//
+//  1. viper.WatchConfig —— 监听已加载的 yaml 文件改动；任何 Write/Create 都触发 Reload
+//  2. SIGHUP 信号 —— 收到时触发 Reload（Linux 习惯：kill -HUP <pid>；Windows 跳过）
+//
+// ctx 取消时关闭信号 channel 退出 goroutine；viper 的文件 watcher 由 viper 自管理。
+//
+// 调用方：main.go 启动后 `go conf.WatchAndReload(ctx)`；不要重复 start——
+// viper.WatchConfig 重复调用会启动多个 fsnotify watcher。
+func WatchAndReload(ctx context.Context) {
+	// yaml 文件 watcher
+	viper.OnConfigChange(func(e fsnotify.Event) {
+		if e.Op&(fsnotify.Write|fsnotify.Create) == 0 {
+			return
+		}
+		if err := Reload(); err != nil {
+			log.Printf("[conf] reload 失败 (yaml=%s): %v", e.Name, err)
+			return
+		}
+		log.Printf("[conf] 已重载配置（触发文件=%s）", e.Name)
+	})
+	viper.WatchConfig()
+
+	// SIGHUP 通道——Windows 没有 SIGHUP，跳过即可
+	if runtime.GOOS == "windows" {
+		<-ctx.Done()
+		return
+	}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
+
+	log.Printf("[conf] 配置热更新已启用：yaml 文件变化自动 reload；kill -HUP %d 也可强制 reload", os.Getpid())
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sigCh:
+			if err := Reload(); err != nil {
+				log.Printf("[conf] SIGHUP reload 失败: %v", err)
+				continue
+			}
+			log.Printf("[conf] 已重载配置（触发=SIGHUP）")
+		}
+	}
 }
 
 // bindEnvKeys 显式 BindEnv 让 Unmarshal 也能拿到 env，否则 viper 默认只在 Get 时读 env。

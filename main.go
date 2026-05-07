@@ -143,6 +143,11 @@ func main() {
 		zaplog.Logger.Infoln(http.ListenAndServe("localhost:6060", nil))
 	}()
 
+	// 配置热更新：yaml 文件改动自动 reload；kill -HUP <pid> 强制 reload。
+	// 详见 conf/conf.go 的 WatchAndReload 注释。这条 goroutine 不进 Wg——
+	// 它由 ctx 控制退出，bot 关闭时随 ctx.Cancel 自然结束。
+	go conf.WatchAndReload(ctx)
+
 	zaplog.Logger.Infof("bot 启动完成，等待信号 / WS 事件...")
 	global.Wg.Wait()
 	zaplog.Logger.Infof("bot 全部协程已退出，main 返回")
