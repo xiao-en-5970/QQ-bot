@@ -239,11 +239,26 @@ type Tools struct {
 //	MaxToolRounds  单次 Chat() 里允许的"工具往返"轮次上限（防止 Kimi 反复调工具不出最终答案）。
 //	               <=0 时取代码内置默认 5。env: GPT_MAX_TOOL_ROUNDS
 //	SystemPrompt   人设/系统提示词，留空使用一个简洁的默认值
+//
+//	Model          @bot chat 用的模型名（Moonshot 模型 ID，例如 moonshot-v1-128k / moonshot-v1-auto /
+//	               kimi-latest / kimi-k2-0905-preview）。env: GPT_MODEL；留空 = moonshot-v1-auto
+//	               （省钱：Moonshot 自动按上下文大小选 v1-8k/32k/128k）
+//	RecognizeModel 自动监听路径下"业务动作识别"用的模型；这条任务对中文理解 + 严格 JSON 输出要求高，
+//	               默认走 Kimi K2（kimi-k2-0905-preview）。env: GPT_RECOGNIZE_MODEL；留空 = 默认
+//	               设计：识别和闲聊分别配模型——识别要稳准、闲聊用便宜的；运维可独立调
+//	QuotaCooldownSeconds 连续 ≥ QuotaErrorThreshold 次撞 exceeded_current_quota_error 后整个 LLM
+//	               调用层进入冷却 N 秒（期间 short-circuit 不再调 API、退化到 regex 兜底识别）。
+//	               <=0 时取默认 1800 秒（30 分钟）。env: GPT_QUOTA_COOLDOWN_SECONDS
+//	QuotaErrorThreshold 触发冷却所需的连续 quota 错次数，<=0 时取默认 3。env: GPT_QUOTA_ERROR_THRESHOLD
 type Gpt struct {
-	APIKey         string `mapstructure:"api_key"`
-	MaxContextSize int64  `mapstructure:"max_context_size"`
-	MaxToolRounds  int    `mapstructure:"max_tool_rounds"`
-	SystemPrompt   string `mapstructure:"system_prompt"`
+	APIKey               string `mapstructure:"api_key"`
+	MaxContextSize       int64  `mapstructure:"max_context_size"`
+	MaxToolRounds        int    `mapstructure:"max_tool_rounds"`
+	SystemPrompt         string `mapstructure:"system_prompt"`
+	Model                string `mapstructure:"model"`
+	RecognizeModel       string `mapstructure:"recognize_model"`
+	QuotaCooldownSeconds int    `mapstructure:"quota_cooldown_seconds"`
+	QuotaErrorThreshold  int    `mapstructure:"quota_error_threshold"`
 }
 
 // Internal bot 暴露给 hfut 调用的"反向 HTTP API" 配置。
@@ -351,6 +366,7 @@ func bindEnvKeys() {
 		"cache.tmp_dir", "cache.pdf_tmp_dir", "cache.max_size", "cache.clear_interval",
 		"tools.jmcomic_bin", "tools.img2pdf_bin", "tools.python_bin",
 		"gpt.api_key", "gpt.max_context_size", "gpt.max_tool_rounds", "gpt.system_prompt",
+		"gpt.model", "gpt.recognize_model", "gpt.quota_cooldown_seconds", "gpt.quota_error_threshold",
 		"commands.enabled", "commands.default",
 		"internal.port",
 	}
@@ -402,6 +418,20 @@ func applyDefaults(c *Config) {
 	}
 	if c.Gpt.MaxToolRounds <= 0 {
 		c.Gpt.MaxToolRounds = 5
+	}
+	// 模型选型默认值——@bot chat 用 v1-auto（按上下文自动选 8k/32k/128k 省钱），
+	// 业务识别用 Kimi K2（中文理解 + 结构化 JSON 输出明显更稳，识别准确度对它最敏感）
+	if strings.TrimSpace(c.Gpt.Model) == "" {
+		c.Gpt.Model = "moonshot-v1-auto"
+	}
+	if strings.TrimSpace(c.Gpt.RecognizeModel) == "" {
+		c.Gpt.RecognizeModel = "kimi-k2-0905-preview"
+	}
+	if c.Gpt.QuotaCooldownSeconds <= 0 {
+		c.Gpt.QuotaCooldownSeconds = 1800 // 30 分钟
+	}
+	if c.Gpt.QuotaErrorThreshold <= 0 {
+		c.Gpt.QuotaErrorThreshold = 3
 	}
 
 	// 自动监听窗口默认值：60 秒沉默触发、单窗口最多 20 条

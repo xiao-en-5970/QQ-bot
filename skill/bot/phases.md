@@ -129,6 +129,18 @@ bot 权限**严格收窄**到 5 类发布动作，所有 app 内交互（评论/
 
 详见 `recognition.md` "Kimi prompt hard rules" 段。
 
+### P3.6 模型可配置 + quota 熔断 + regex 兜底识别
+
+观测到生产日志全是 `exceeded_current_quota_error`，bot 41 小时一次都没成功调过 Kimi。修复：
+
+- ✅ **模型抽 conf**：`Gpt.Model` (env `GPT_MODEL`) + `Gpt.RecognizeModel` (env `GPT_RECOGNIZE_MODEL`)；写死的 `ModelMoonshotV1128K` 改读 conf。默认升级：闲聊用 `moonshot-v1-auto`（按上下文省钱）、识别用 `kimi-k2-0905-preview`（中文识别 + JSON 输出更稳）。go-moonshot SDK 的 `ChatCompletionsModelID` 是 string 别名，可传任意 Moonshot 服务端支持的模型名
+- ✅ **quotaGate 熔断器**：`utils/kimi/quota_gate.go`；连续 ≥ `GPT_QUOTA_ERROR_THRESHOLD`（默认 3）次 quota 错 → 冷却 `GPT_QUOTA_COOLDOWN_SECONDS`（默认 1800）秒，期间 LLM 入口 short-circuit 不再撞 API
+- ✅ **regex 兜底识别**：`utils/kimi/recognize_regex.go`；熔断期间 `auto_reply.go` 退化为正则识别 publish_good + off_shelf；保守严格（仅锚定句式 + 价格强制 + 撤回关键词 hard reject + 价格上限保护）
+- ✅ **ack 文案区分**：regex 兜底产出的 ack 用 "已（关键词识别）上架..." 让用户感知到不是 LLM 识别，附"如不对请回'撤销'"
+- ✅ 单元测试：26 个 case 覆盖 quota gate 状态机 (open/trip/recover/reset) + regex 各类命中 / 拒判 / 边界
+
+详见 `recognition.md` "LLM 配额熔断 + regex 兜底识别（P3.6）" 段。
+
 ### 其他
 
 - 重启窗口持久化（用了一段时间觉得"丢一半窗口"难受再做；目前接受丢）

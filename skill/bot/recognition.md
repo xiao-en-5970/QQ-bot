@@ -142,3 +142,47 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 - 仅对**会改 hfut 状态**的 action 计数：`publish_good` / `publish_question` / `publish_answer`。
 - `off_shelf` / `close_question` 多候选时只是反问 + 等回应，**不计数**，避免用户消歧时反被限流。
 - 命中限流时返回 `ackKindAskUser` + "发布太频繁，请 Xs 后再来"——**不**调 hfut。
+
+---
+
+## LLM 配额熔断 + regex 兜底识别（P3.6）
+
+### 动机
+
+观测到生产 ak quota 耗尽时（`exceeded_current_quota_error`），bot 仍然**每条新消息都死撞 Moonshot API**，41 小时刷出 60+ 条 ERROR 日志、浪费 RTT、淹没真问题；同时所有窗口 flush 都直接 ERROR 返回，群里业务消息**完全识别不到**。
+
+### quotaGate 熔断器（`utils/kimi/quota_gate.go`）
+
+- 包级单例 `globalQuotaGate`：连续 ≥ `GPT_QUOTA_ERROR_THRESHOLD`（默认 3）次 quota 错 → 进入冷却 `GPT_QUOTA_COOLDOWN_SECONDS`（默认 1800）秒
+- LLM 入口（`Chat` / `RecognizeBusinessActions`）调用前先 `IsBlocked()` short-circuit，识别返回 sentinel `kimi.ErrQuotaCooling`
+- 任何调用结果通过 `RecordResult(err)` 反馈：成功 / 非 quota 错 都 reset 计数；只 quota 错累计
+- 冷却到点自动恢复（lazy 检查时间戳，不起 goroutine）
+- 熔断瞬间打一行 WARN log，期间静默——不再每条消息都打 ERROR
+
+### regex 兜底识别（`utils/kimi/recognize_regex.go`）
+
+熔断期间 `auto_reply.go` 调 `kimi.RecognizeViaRegex(input)` 退化识别，**仅识别两类高置信度场景**：
+
+| 模式 | 命中正则 | 命中样例 | 不命中样例 |
+|---|---|---|---|
+| publish_good 二手 | `^\s*(?:出\|卖)\s*<标题>\s*<价格>\s*[元r块￥]` | "出三层鞋架 6元"、"卖自行车 200块" | "出门"、"出鞋架"（无价）、"出 鞋架 面议" |
+| publish_good 求助 | `^\s*(?:代\|求人\|拼\|求带)\s*<标题>\s*<价格>` | "代课 30r"、"拼车去机场 30元" | "求 经验"、"求 资源" |
+| off_shelf 短句 | `^\s*(?:已出\|已找到\|出掉了)\s*[!！.]?\s*$` | "已出"、"已找到" | "快乐出门去玩了" |
+| off_shelf 带 hint | `<物品> 已出` 或 `已出 <物品>` | "鞋架已出"、"已出鞋架" | — |
+
+**保守原则**（对应 prompt hard rules）：
+
+- hard rule 14：含撤回 / 改主意关键词（`算了`、`不卖了`、`刚才那个不算`、`忽略我刚才`）整条 input 直接 drop
+- hard rule 15：纯"出"无标题无价格的句子（`出了`、`都出了`、`出门`）一律 drop
+- 价格上限保护：二手 100w 元 / 求助 10w 元，超过的视为误识别
+- 纯图片消息 `[图片]` 不参与识别
+- 仅识别 `publish_good` + `off_shelf`；问答类（`publish_question` / `publish_answer` / `close_question`）正则误判率太高一律 drop
+
+### ack 文案区分
+
+regex 兜底识别结果的 `Confidence` 固定为 `0.6`（vs LLM 的 0.0~1.0 浮动）。`auto_reply_dispatch.go` 在 ack 文案上**显式区分**：
+
+- LLM 路径：`已为你上架二手「鞋架」：6 元（goods_id=42）`
+- regex 兜底：`已（关键词识别）上架二手「鞋架」：6 元（goods_id=42）；如不对请回'撤销'`
+
+让用户感知"现在是兜底模式"，撤销路径靠现有"撤回 hard reject" + "@bot 下架"。

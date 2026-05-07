@@ -111,6 +111,10 @@
 | `GROUP_AUTO_REPLY_VERBOSITY` | 自动回复模式：`verbose` / `normal`（详见 `verbosity.md`） | verbose |
 | `COMMANDS_ENABLED` | 启用的子命令（白名单） | 空 = 全禁用 |
 | `GPT_API_KEY` | Moonshot API Key | 空 = 不启用聊天 |
+| `GPT_MODEL` | @bot chat 用模型（如 `moonshot-v1-auto` / `kimi-latest`） | `moonshot-v1-auto` |
+| `GPT_RECOGNIZE_MODEL` | 业务识别用模型（识别要稳准，建议 K2） | `kimi-k2-0905-preview` |
+| `GPT_QUOTA_COOLDOWN_SECONDS` | 连续 quota 错触发熔断后冷却时长（秒） | 1800 |
+| `GPT_QUOTA_ERROR_THRESHOLD` | 触发熔断所需的连续 quota 错次数 | 3 |
 | `HFUT_API_URL` | hfut 后端 base URL | — |
 | `HFUT_API_JWT_SECRET` | bot 跟 hfut 共享的 service-to-service JWT secret（HS256） | — |
 | `BOT_INTERNAL_API_PORT` | bot 内部 HTTP server 端口（仅 internal network 监听） | 8090 |

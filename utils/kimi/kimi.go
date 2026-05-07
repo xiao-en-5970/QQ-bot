@@ -14,6 +14,7 @@ import (
 	"qq_bot/conf"
 	zaplog "qq_bot/utils/zap"
 	"sync"
+	"time"
 
 	"github.com/northes/go-moonshot"
 )
@@ -117,7 +118,8 @@ func InitKimi() (*Kimi, error) {
 		ctxLen = 40
 	}
 
-	zaplog.Logger.Infof("Kimi 聊天能力已启用 (max_context_size=%d, prompt长度=%d)", ctxLen, len(prompt))
+	zaplog.Logger.Infof("Kimi 聊天能力已启用 (chat_model=%s, recognize_model=%s, max_context_size=%d, prompt长度=%d, quota_cooldown=%ds)",
+		conf.Cfg.Gpt.Model, conf.Cfg.Gpt.RecognizeModel, ctxLen, len(prompt), conf.Cfg.Gpt.QuotaCooldownSeconds)
 	return &Kimi{
 		cli:    cli,
 		users:  make(map[int64]*QAS),
@@ -158,6 +160,10 @@ func (k *Kimi) Chat(ctx context.Context, userID int64, text string) (string, err
 	if k == nil {
 		return "", errors.New("kimi 未启用")
 	}
+	// 进入 quota 冷却期则直接返回——闲聊不重要，宁可让用户感知到 bot 在喘息也不要继续撞 API
+	if blocked, remain := globalQuotaGate.IsBlocked(); blocked {
+		return "", fmt.Errorf("kimi quota 冷却中（剩余 %s），请稍后再试", remain.Truncate(time.Second))
+	}
 	qas := k.getOrCreate(userID)
 	messages := qas.AsMessages(k.prompt, text)
 	tools := toolSpecs()
@@ -171,13 +177,15 @@ func (k *Kimi) Chat(ctx context.Context, userID int64, text string) (string, err
 
 	zaplog.Logger.Debugf("kimi Q user=%d: %s (tools=%d, max_rounds=%d)", userID, text, len(tools), maxRounds)
 
+	chatModel := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.Model)
 	for round := 0; round < maxRounds; round++ {
 		resp, err := k.cli.Chat().Completions(ctx, &moonshot.ChatCompletionsRequest{
-			Model:       moonshot.ModelMoonshotV1128K,
+			Model:       chatModel,
 			Messages:    messages,
 			Temperature: 0.9,
 			Tools:       tools, // nil 也 ok，moonshot 接 omitempty
 		})
+		globalQuotaGate.RecordResult(err)
 		if err != nil {
 			return "", fmt.Errorf("调用 moonshot completions 失败: %w", err)
 		}

@@ -61,13 +61,21 @@
 
 ## 请求下架（手动审计的兜底）
 
-`POST /api/v1/goods/:id/request-off-shelf` —— bot 在原群里 @ 卖家："你的商品 XX 是不是已出？回'是'就下架"
+`POST /api/v1/goods/:id/request-off-shelf` —— bot 通知卖家："你的商品 XX 是不是已出？回'是'就下架"
 
 **手动审计**避免 app 用户恶意点别人的"已出"。
 
 - 同 `(caller, good)` 1h 内只能请求 1 次（防 app 用户骚扰卖家）
-- 失败时清限流锁让用户能重试
+- 通知通路三级 fallback（让旧数据 / 跨群发布 / bot-非好友 各种边界都能尽量送达）：
+  1. 商品自己的 `goods.created_in_group_id`（bot 上架时记录，最精准）→ `SendGroup` @ 卖家
+  2. fallback 到 `users.created_in_group_id`（owner 首见群）→ `SendGroup` @ 卖家
+  3. 都缺失 / 全失败 → `CheckFriend`，是 bot 好友就 `SendPrivate`；否则前端弹"请直接通过 QQ 联系"
+- 三级全失败时清限流锁让用户能重试
 - 卖家在 QQ 群里回 "是 / 已出 / 鞋架已出" 等 → 走现有 `off_shelf` 识别链路自动下架（不需要新逻辑）
+
+字段持久化路径：
+- `goods.created_in_group_id` 由 `BotPublishGood` 在落库时写入（`PublishGoodReq.GroupID = bot 收到该消息的 QQ 群号`）；非 bot 路径上架（管理员 / app 直传）的商品保持 NULL
+- 存量孤儿（迁移前已存在）`users.created_in_group_id` 也可能为 NULL，会直接走第 3 级 fallback
 
 ---
 

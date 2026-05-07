@@ -116,7 +116,7 @@ func dispatchActionToHfut(
 	// 第 3 步：按 action.Type 分流到具体 hfut 调用。
 	switch action.Type {
 	case "publish_good":
-		return dispatchPublishGood(ctx, upsert.UserID, snap, action)
+		return dispatchPublishGood(ctx, key.GroupID, upsert.UserID, snap, action)
 	case "publish_question":
 		return dispatchPublishQuestion(ctx, upsert.UserID, snap, action)
 	case "publish_answer":
@@ -150,7 +150,9 @@ func qqNumberOf(userID int64) string {
 // publish_good — 上架商品
 // =============================================================================
 
-func dispatchPublishGood(ctx context.Context, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
+// dispatchPublishGood 把 publish_good action 落库。groupID 是 bot 收到该消息的 QQ 群号——
+// 后端会持久化到 goods.created_in_group_id，给孤儿商品 "请求下架" 提供精准的 @ 卖家位置。
+func dispatchPublishGood(ctx context.Context, groupID int64, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
 	// 用 ImageMessageIDs 还原图片 URL（NapCat 临时 URL）
 	napcatImages := imageURLsFromSnap(snap, a.ImageMessageIDs)
 	// 转存到 hfut OSS 拿永久 URL；任一张转存失败就 skip 那张（不让整体上架失败）
@@ -165,6 +167,7 @@ func dispatchPublishGood(ctx context.Context, userID uint, snap []autoReplyMsg, 
 
 	resp, err := global.Hfut.PublishGood(ctx, hfut.PublishGoodReq{
 		UserID:     userID,
+		GroupID:    groupID,
 		Title:      strings.TrimSpace(a.Title),
 		Content:    strings.TrimSpace(a.Description),
 		Category:   int16(a.Category),
@@ -215,9 +218,16 @@ func dispatchPublishGood(ctx context.Context, userID uint, snap []autoReplyMsg, 
 	if a.Location != "" {
 		locPart = "，地点 " + a.Location
 	}
+	prefix := "已为你上架"
+	suffix := ""
+	if kimi.IsRegexFallback(&a) {
+		// quota 冷却时走 regex 兜底——告知用户这是关键词识别的结果，让他能秒撤销
+		prefix = "已（关键词识别）上架"
+		suffix = "；如不对请回'撤销'"
+	}
 	return ackResult{
-		Text: fmt.Sprintf("已为你上架%s「%s」%s%s%s（goods_id=%d）",
-			category, orPlaceholder(a.Title, "(无标题)"), "："+priceStr, locPart, imgPart, resp.GoodID),
+		Text: fmt.Sprintf("%s%s「%s」%s%s%s（goods_id=%d）%s",
+			prefix, category, orPlaceholder(a.Title, "(无标题)"), "："+priceStr, locPart, imgPart, resp.GoodID, suffix),
 		Kind: ackKindSuccess,
 	}
 }

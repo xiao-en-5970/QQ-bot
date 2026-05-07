@@ -179,8 +179,13 @@ type UpsertQQChildResp struct {
 }
 
 // PublishGoodReq 上架商品入参。
+//
+// GroupID：bot 触发本次上架时来源 QQ 群号；后端持久化到 goods.created_in_group_id，
+// 后续孤儿商品 "请求下架" 优先用它定位 "在哪个群 @ 卖家"。
+// <=0 时不传给后端（兼容非 bot 路径，落库为 NULL）。
 type PublishGoodReq struct {
 	UserID     uint     `json:"user_id"`
+	GroupID    int64    `json:"group_id,omitempty"` // bot 上架时来源 QQ 群号；<=0 不填
 	Title      string   `json:"title"`
 	Content    string   `json:"content"`
 	Category   int16    `json:"category"`   // 1=二手 2=有偿求助/AA活动

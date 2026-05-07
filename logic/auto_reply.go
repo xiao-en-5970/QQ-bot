@@ -20,6 +20,7 @@ package logic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"qq_bot/conf"
@@ -233,7 +234,15 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 
 	input := buildRecognizeInput(key, first.UserCard, snap)
 	result, err := global.Kimi.RecognizeBusinessActions(ctx, input)
-	if err != nil {
+	switch {
+	case err == nil:
+		// 正常路径——result 来自 Kimi
+	case errors.Is(err, kimi.ErrQuotaCooling):
+		// quota gate 冷却期：退化到 regex 兜底（保守识别，仅 publish_good + off_shelf）
+		zaplog.Logger.Infof("autoReply group=%d user=%d Kimi quota 冷却中 → regex 兜底识别",
+			key.GroupID, key.UserID)
+		result = kimi.RecognizeViaRegex(input)
+	default:
 		zaplog.Logger.Errorf("autoReply 识别失败 group=%d user=%d: %v", key.GroupID, key.UserID, err)
 		return
 	}

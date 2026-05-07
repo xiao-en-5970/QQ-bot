@@ -15,8 +15,16 @@ import (
 	"errors"
 	"fmt"
 
+	"qq_bot/conf"
+
 	"github.com/northes/go-moonshot"
 )
+
+// ErrQuotaCooling 是识别入口在 quotaGate 冷却期内 short-circuit 时返回的 sentinel。
+//
+// 调用方（auto_reply）应当用 errors.Is 检测，再决定是退化为 regex 兜底还是直接 drop。
+// 这条错误**不算** "识别失败" log——是预期内的熔断行为，应该 INFO 级别。
+var ErrQuotaCooling = errors.New("kimi quota gate cooling")
 
 // RecognizeMsg 单条扁平化的群消息，喂给 LLM 用。
 //
@@ -251,9 +259,17 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
 // RecognizeBusinessActions 把一段窗口快照交给 Kimi 识别业务动作。
 //
 // 调用方应当保证 k != nil；nil 接收者会 panic。
+//
+// 错误模式：
+//   - ErrQuotaCooling：quotaGate 处于冷却期，未实际调 API；上层应改走 RecognizeViaRegex 兜底
+//   - 其它 error：网络 / API / parse 错——上层应 ack=fail（normal 模式静默）
 func (k *Kimi) RecognizeBusinessActions(ctx context.Context, input RecognizeInput) (*RecognizeResult, error) {
 	if k == nil {
 		return nil, errors.New("kimi 未启用")
+	}
+	// 进入 quota 冷却期则 short-circuit——不再撞 API、让上层走 regex 兜底
+	if blocked, _ := globalQuotaGate.IsBlocked(); blocked {
+		return nil, ErrQuotaCooling
 	}
 
 	// 把 input 序列化成模型 user message 里的 JSON 文本——比组装中文文本更结构化、token 更稳
@@ -262,8 +278,9 @@ func (k *Kimi) RecognizeBusinessActions(ctx context.Context, input RecognizeInpu
 		return nil, fmt.Errorf("RecognizeInput 序列化失败: %w", err)
 	}
 
+	model := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.RecognizeModel)
 	resp, err := k.cli.Chat().Completions(ctx, &moonshot.ChatCompletionsRequest{
-		Model: moonshot.ModelMoonshotV1128K,
+		Model: model,
 		Messages: []*moonshot.ChatCompletionsMessage{
 			{Role: moonshot.RoleSystem, Content: recognizeSystemPrompt},
 			{Role: moonshot.RoleUser, Content: "请识别下面这段窗口的业务动作:\n" + string(inputJSON)},
@@ -274,6 +291,7 @@ func (k *Kimi) RecognizeBusinessActions(ctx context.Context, input RecognizeInpu
 		},
 		// 不传 Tools——识别不需要 tool calling
 	})
+	globalQuotaGate.RecordResult(err)
 	if err != nil {
 		return nil, fmt.Errorf("调用 moonshot completions 失败: %w", err)
 	}
