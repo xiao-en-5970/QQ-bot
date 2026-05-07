@@ -88,6 +88,43 @@ func TestRegex_PublishGood_Help(t *testing.T) {
 	}
 }
 
+func TestRegex_PublishGood_Negotiable(t *testing.T) {
+	cases := []struct {
+		text           string
+		wantTitle      string
+		wantCategory   int
+		wantNegotiable bool
+	}{
+		{"出 鞋架 面议", "鞋架", 1, true},
+		{"卖自行车 面议", "自行车", 1, true},
+		{"代取快递 面议", "取快递", 2, true},
+	}
+	for _, c := range cases {
+		t.Run(c.text, func(t *testing.T) {
+			res := RecognizeViaRegex(singleMsg(c.text))
+			if len(res.Actions) != 1 {
+				t.Fatalf("应识别为 1 条 action，得到 %d: %+v", len(res.Actions), res.Actions)
+			}
+			a := res.Actions[0]
+			if a.Type != "publish_good" {
+				t.Errorf("type = %q, want publish_good", a.Type)
+			}
+			if a.Title != c.wantTitle {
+				t.Errorf("title = %q, want %q", a.Title, c.wantTitle)
+			}
+			if a.Category != c.wantCategory {
+				t.Errorf("category = %d, want %d", a.Category, c.wantCategory)
+			}
+			if a.Negotiable != c.wantNegotiable {
+				t.Errorf("negotiable = %v, want %v", a.Negotiable, c.wantNegotiable)
+			}
+			if a.Price != nil {
+				t.Errorf("price = %v, want nil", a.Price)
+			}
+		})
+	}
+}
+
 func TestRegex_PublishGood_RejectAmbiguous(t *testing.T) {
 	// hard rule 15：没有商品名 + 没有价格的"出"句子不算 publish_good
 	rejects := []string{
@@ -95,9 +132,8 @@ func TestRegex_PublishGood_RejectAmbiguous(t *testing.T) {
 		"都出了",
 		"出门",
 		"拿出来",
-		"出 鞋架 面议", // 没有数字价格 → 不命中（面议路径让 LLM 处理）
-		"出鞋架",     // 没价格
-		"6 元",     // 没"出"前缀
+		"出鞋架", // 没价格、没「面议」
+		"6 元", // 没"出"前缀
 	}
 	for _, txt := range rejects {
 		t.Run(txt, func(t *testing.T) {

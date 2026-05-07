@@ -131,6 +131,7 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
 6. **价格判定**:
    - 明确数字（"6元"、"15r"、"6 块"）→ price = 6.0；negotiable=false
    - 写了"面议"、"看心情"、"私聊价"、根本没说价 → price 不填；negotiable=true
+   - price 写成 0、负数或语义明显不是真实标价 → negotiable=true，不设 price（上架侧按面议处理）
    - 区间价（"5-10"）→ 取下限作为 price，description 里说明"5-10元"
 7. **category 判定**:
 

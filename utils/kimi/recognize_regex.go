@@ -30,7 +30,7 @@ var regexHardRejectKeywords = []string{
 	"算了", "刚才那个不算", "忽略我刚才", "撤回上一条", "不卖了", "不出了", "不要了", "改主意",
 }
 
-// publish_good 二手二手：头部锚定 + 价格强制
+// publish_good 二手买卖：头部锚定 + 价格强制
 //
 // 命中样例：
 //   - "出三层鞋架 6元"
@@ -41,9 +41,15 @@ var regexHardRejectKeywords = []string{
 // 不命中（保守，避免 hard rule 15 失效）：
 //   - "出了"、"都出了"、"出门"、"拿出来"
 //   - "出 不知道"（标题为空）
-//   - "出 鞋架 面议"（无数字 → 价格不可解析；面议路径让 LLM 处理，正则不参与）
+//   - "出 鞋架 面议"（无数值价）：由 rePublishGoodSecondHandNegotiable 兜底
 var rePublishGoodSecondHand = regexp.MustCompile(
 	`^\s*(?:出|卖)\s*([\p{Han}\p{L}\p{N} ・·、，,。；;]{1,40}?)\s*(\d+(?:\.\d{1,2})?)\s*[元r块￥¥]`,
+)
+
+// publish_good 二手：「出/卖 + 标题 + 面议」（无数值）
+var rePublishGoodSecondHandNegotiable = regexp.MustCompile(
+	// 不用 \b：`面议` 后接行尾或标点更稳（Go 的 \b 对中文词尾常不成立）
+	`^\s*(?:出|卖)\s*([\p{Han}\p{L}\p{N} ・·、，,。；;]{1,40}?)\s*面议(?:\s*[!！。\.]*)?\s*$`,
 )
 
 // publish_good 有偿求助：头部锚定 "代/求人/拼/求带" + 价格强制
@@ -58,6 +64,11 @@ var rePublishGoodSecondHand = regexp.MustCompile(
 //   - "求 XX"（求资源、求经验）—— 这是 publish_question，不在 regex 兜底范围
 var rePublishGoodHelp = regexp.MustCompile(
 	`^\s*(?:代|求人|拼|求带)\s*([\p{Han}\p{L}\p{N} ・·、，,。；;]{1,40}?)\s*(\d+(?:\.\d{1,2})?)\s*[元r块￥¥]`,
+)
+
+// publish_good 有偿求助：「代/求人/拼/求带 + 标题 + 面议」（无数值）
+var rePublishGoodHelpNegotiable = regexp.MustCompile(
+	`^\s*(?:代|求人|拼|求带)\s*([\p{Han}\p{L}\p{N} ・·、，,。；;]{1,40}?)\s*面议(?:\s*[!！。\.]*)?\s*$`,
 )
 
 // off_shelf：必须以"已出"或"已找到"为关键词，否则 drop
@@ -177,6 +188,40 @@ func tryPublishGood(text string, msgID int64) (RecognizeAction, bool) {
 			Description:      text,
 			Price:            &priceYuan,
 			Negotiable:       false,
+			Category:         2,
+			SourceMessageIDs: []int64{msgID},
+		}, true
+	}
+	if m := rePublishGoodSecondHandNegotiable.FindStringSubmatch(text); len(m) == 2 {
+		title := strings.TrimSpace(m[1])
+		if title == "" || containsHardReject(text) {
+			return RecognizeAction{}, false
+		}
+		return RecognizeAction{
+			Type:             "publish_good",
+			Confidence:       regexFallbackConfidence,
+			Reason:           "regex 兜底（二手）：'出/卖 + 标题 + 面议'",
+			Title:            title,
+			Description:      text,
+			Price:            nil,
+			Negotiable:       true,
+			Category:         1,
+			SourceMessageIDs: []int64{msgID},
+		}, true
+	}
+	if m := rePublishGoodHelpNegotiable.FindStringSubmatch(text); len(m) == 2 {
+		title := strings.TrimSpace(m[1])
+		if title == "" || containsHardReject(text) {
+			return RecognizeAction{}, false
+		}
+		return RecognizeAction{
+			Type:             "publish_good",
+			Confidence:       regexFallbackConfidence,
+			Reason:           "regex 兜底（求助）：'代/求人/拼/求带 + 标题 + 面议'",
+			Title:            title,
+			Description:      text,
+			Price:            nil,
+			Negotiable:       true,
 			Category:         2,
 			SourceMessageIDs: []int64{msgID},
 		}, true
