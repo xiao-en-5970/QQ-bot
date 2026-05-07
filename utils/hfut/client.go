@@ -24,6 +24,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -306,6 +307,40 @@ func (c *Client) ListActiveGoods(ctx context.Context, userID uint, limit int) ([
 		Total int           `json:"total"`
 	}
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.List, nil
+}
+
+// SeekGoodMatch 「收××」检索单条（与 hfut BotSeekGoodMatch 对齐）。
+type SeekGoodMatch struct {
+	Title        string `json:"title"`
+	CreatedAt    string `json:"created_at"`
+	Price        int    `json:"price"`
+	Negotiable   bool   `json:"negotiable"`
+	SellerQQ     string `json:"seller_qq,omitempty"`
+	OrphanSeller bool   `json:"orphan_seller"`
+}
+
+// SearchGoodsSeek GET /api/v1/bot/groups/:group_id/goods/seek
+func (c *Client) SearchGoodsSeek(ctx context.Context, groupID int64, q string, limit int) ([]SeekGoodMatch, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 10 {
+		limit = 10
+	}
+	path := fmt.Sprintf("/api/v1/bot/groups/%d/goods/seek?q=%s&limit=%d",
+		groupID, url.QueryEscape(strings.TrimSpace(q)), limit)
+	var out struct {
+		List  []SeekGoodMatch `json:"list"`
+		Total int             `json:"total"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		var ce *ClientError
+		if errors.As(err, &ce) && ce.HTTPStatus == http.StatusNotFound {
+			return nil, ErrGroupNoSchool
+		}
 		return nil, err
 	}
 	return out.List, nil

@@ -5,7 +5,7 @@
 //
 // 与 LLM 路径的关键差别：
 //   - 仅看单条消息（不做跨条窗口聚合；规避语义聚合的歧义）
-//   - 仅识别 publish_good（含二手/求助两类）+ off_shelf；问答类一律 drop
+//   - 识别 publish_good（含二手/求助两类）+ off_shelf + seek_goods；问答类一律 drop
 //   - 必须有强锚定特征（价格 / 关键词）才命中，避免"算了不卖了"被错判
 //   - confidence 统一打 0.6，上层 ack 可据此提示用户"模型暂时不可用，机器人用关键词识别的，如不对请回'撤销'"
 //
@@ -84,6 +84,15 @@ var (
 	)
 )
 
+// seek_goods：收「x」/ 收购… / 求购… / 收 xx（整句）
+var (
+	reSeekQuoted   = regexp.MustCompile(`^\s*收[「『]([^」』]{1,40})[」』]\s*$`)
+	reSeekAcquire  = regexp.MustCompile(`^\s*收购\s*([\p{Han}\p{L}\p{N}]{2,40})\s*$`)
+	reSeekWantBuy  = regexp.MustCompile(`^\s*求购\s*([\p{Han}\p{L}\p{N}]{2,40})\s*$`)
+	reSeekSpaced   = regexp.MustCompile(`^\s*收\s+([\p{Han}\p{L}\p{N} ・·]{2,40})\s*$`)
+	reSeekCompound = regexp.MustCompile(`^\s*收([\p{Han}\p{L}\p{N}]{2,40})\s*$`)
+)
+
 // RecognizeViaRegex 在 LLM 不可用（quota 冷却 / 显式 fallback）时做最低保障识别。
 //
 // 输入是跟 LLM 路径完全相同的 RecognizeInput；输出是 RecognizeResult（actions 可能为空）。
@@ -110,6 +119,10 @@ func RecognizeViaRegex(input RecognizeInput) *RecognizeResult {
 			continue
 		}
 		if act, ok := tryOffShelf(text, msg.MessageID); ok {
+			out.Actions = append(out.Actions, act)
+			continue
+		}
+		if act, ok := trySeekGoods(text, msg.MessageID); ok {
 			out.Actions = append(out.Actions, act)
 			continue
 		}
@@ -267,6 +280,46 @@ func tryOffShelf(text string, msgID int64) (RecognizeAction, bool) {
 			OffShelfHint:     hint,
 			SourceMessageIDs: []int64{msgID},
 		}, true
+	}
+	return RecognizeAction{}, false
+}
+
+// trySeekGoods 匹配「收/求购/收购 + 物品」整句；顺序上放在 off_shelf 之后。
+func trySeekGoods(text string, msgID int64) (RecognizeAction, bool) {
+	try := func(hint string) (RecognizeAction, bool) {
+		hint = strings.TrimSpace(hint)
+		if hint == "" || containsHardReject(text) {
+			return RecognizeAction{}, false
+		}
+		if strings.HasPrefix(hint, "到") {
+			return RecognizeAction{}, false
+		}
+		return RecognizeAction{
+			Type:             "seek_goods",
+			Confidence:       regexFallbackConfidence,
+			Reason:           "regex 兜底：求购/收 + 物品关键词",
+			SeekHint:         hint,
+			SourceMessageIDs: []int64{msgID},
+		}, true
+	}
+	if m := reSeekQuoted.FindStringSubmatch(text); len(m) == 2 {
+		return try(m[1])
+	}
+	if m := reSeekAcquire.FindStringSubmatch(text); len(m) == 2 {
+		return try(m[1])
+	}
+	if m := reSeekWantBuy.FindStringSubmatch(text); len(m) == 2 {
+		return try(m[1])
+	}
+	if m := reSeekSpaced.FindStringSubmatch(text); len(m) == 2 {
+		return try(m[1])
+	}
+	if m := reSeekCompound.FindStringSubmatch(text); len(m) == 2 {
+		// 避免与「收购」重叠：整句以「收购」开头时已走 reSeekAcquire
+		if strings.HasPrefix(strings.TrimSpace(text), "收购") {
+			return RecognizeAction{}, false
+		}
+		return try(m[1])
 	}
 	return RecognizeAction{}, false
 }

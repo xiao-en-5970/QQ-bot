@@ -42,7 +42,7 @@ func processDupOffShelfAck(key autoReplyBucketKey, snap []autoReplyMsg) bool {
 		zaplog.Logger.Errorf("autoReply dup-followup OffShelfGood 失败 good=%d user=%d: %v",
 			p.GoodID, p.HfutUserID, err)
 		res := ackResult{
-			Text: fmt.Sprintf("「%s」下架没成功，过会儿再试一次", show),
+			Text: fmt.Sprintf("「%s」下架失败，稍后再试", show),
 			Kind: ackKindFail,
 		}
 		verbose := conf.Cfg.Group.IsAutoReplyVerbose()

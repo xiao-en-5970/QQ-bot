@@ -83,7 +83,7 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 
 1. `publish_good` 调用前**先调** `list_my_active_goods(qq_number)` 拿该用户当前在售清单
 2. 把候选项一起喂给 LLM，让模型判断"我现在想发的这条，跟列表里某条是不是几乎一样？"
-3. 是 → 不调 `publish_good`，群里 @ 用户回："你这条像之前发的'XXX'，没重复上架（如要重发请先 @bot 下架旧的）"
+3. 是 → 不调 `publish_good`，群里 @：`「XXX」已在售，要重发先回下架旧的`
 4. 否 → 走正常 publish_good 流程
 
 ### hfut 后端兜底去重
@@ -97,7 +97,7 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 ### 误判保险
 
 - 用户明确说"我重新发一遍 XX 因为图模糊了" → bot 应该先 `off_shelf` 把旧的下了再 `publish_good`，绕开去重
-- bot 层判断不准时，hfut 兜底返回 409，bot 收到 409 后**不要慌张**——直接群里 @ 用户："你这条跟之前的'XXX'撞了，要重发请先回'下架旧的'"
+- hfut 返 409 时群里 @：`「XXX」已在售，要重发先回：下架旧的`
 
 ---
 
@@ -141,7 +141,7 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 
 - 仅对**会改 hfut 状态**的 action 计数：`publish_good` / `publish_question` / `publish_answer`。
 - `off_shelf` / `close_question` 多候选时只是反问 + 等回应，**不计数**，避免用户消歧时反被限流。
-- 命中限流时返回 `ackKindAskUser` + "发布太频繁，请 Xs 后再来"——**不**调 hfut。
+- 命中限流时：`太快，Xs 后再发`，**不**调 hfut。
 
 ---
 
@@ -185,7 +185,7 @@ NapCat 在 `image` segment 里给的 URL 是腾讯多媒体的临时签名链接
 regex 兜底识别结果的 `Confidence` 固定为 `0.6`（vs LLM 的 0.0~1.0 浮动）。`auto_reply_dispatch.go` 在 ack 文案上**显式区分**：
 
 - LLM 路径：`上架成功 二手「鞋架」 6 元，食堂，配图 2 张`
-- regex 兜底：`上架成功 二手「鞋架」 6 元，食堂，配图 2 张（关键词识别，如不对回"撤销"）`
+- regex 兜底：同上并在末尾 `（兜底识别，不对说撤销）`
 
 让用户感知"现在是兜底模式"，撤销路径靠现有"撤回 hard reject" + "@bot 下架"。
 

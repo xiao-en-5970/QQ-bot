@@ -71,8 +71,8 @@ bot 权限**严格收窄**到 5 类发布动作，所有 app 内交互（评论/
 - ✅ **孤儿 inbound 通知转发**：`notification.dispatchInbound` 用 `ResolveInboundTarget` 4 路分流
 - ✅ **孤儿商品 VO**：GET /goods/:id 及列表条目在 owner 是孤儿时返回 `is_orphan_owner: true` + `seller_qq_number`
 - ✅ **孤儿商品前端切换**：`hfut-front/src/screens/GoodDetailScreen.tsx` 检测到 `is_orphan_owner=true` → 隐藏"我想要"按钮，改为"通过 QQ 联系：QQ-XXX"告示 + "请求下架"按钮
-- ✅ **请求下架**：`POST /api/v1/goods/:id/request-off-shelf` —— bot 在原群里 @ 卖家"是不是已出？回'是'就下架"。失败时清限流锁让用户能重试；同 (caller, good) 1h 内只能请求一次防刷
-- 卖家在 QQ 群里回 "是 / 已出 / 鞋架已出" 等 → 走现有 `off_shelf` 识别链路自动下架（不需要新逻辑）
+- ✅ **请求下架**：`POST /api/v1/goods/:id/request-off-shelf` —— bot 在群里 @ 卖家：`「标题」已经出了吗？请回答是或不是。`（无 goods_id）；失败清限流锁；同 (caller, good) 1h 限 1 次
+- 卖家回「是 / 不是 / 已出 / 某某已出」→ 「是、已出、带关键词」走 `off_shelf`；单独「不是 / 没出」不按下架
 
 ### P2c 边界 & 回退
 

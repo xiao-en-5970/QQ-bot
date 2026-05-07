@@ -366,24 +366,28 @@ func buildAckMessage(a kimi.RecognizeAction) string {
 		if a.Category == 2 {
 			category = "有偿求助"
 		}
-		return fmt.Sprintf("收到上架请求 %s「%s」，但服务暂时不可用，过会儿再试",
+		return fmt.Sprintf("%s「%s」暂不可发布，稍后再试",
 			category, orPlaceholder(a.Title, "未命名"))
 
 	case "publish_question":
-		return fmt.Sprintf("收到提问「%s」，但服务暂时不可用，过会儿再试",
+		return fmt.Sprintf("提问「%s」暂不可发，稍后再试",
 			orPlaceholder(a.QuestionTitle, "未命名"))
 
 	case "publish_answer":
-		hint := orPlaceholder(a.AnswerHintTo, "刚才那条")
-		return fmt.Sprintf("收到对「%s」的回答，但服务暂时不可用，过会儿再试", hint)
+		hint := orPlaceholder(a.AnswerHintTo, "那条")
+		return fmt.Sprintf("回答「%s」暂不可发，稍后再试", hint)
 
 	case "off_shelf":
-		hint := orPlaceholder(a.OffShelfHint, "你想下架的商品")
-		return fmt.Sprintf("收到下架请求「%s」，但服务暂时不可用，过会儿再试", hint)
+		hint := orPlaceholder(a.OffShelfHint, "商品")
+		return fmt.Sprintf("下架「%s」暂不可用，稍后再试", hint)
 
 	case "close_question":
-		hint := orPlaceholder(a.CloseQuestionHint, "你想关闭的提问")
-		return fmt.Sprintf("收到关闭请求「%s」，但服务暂时不可用，过会儿再试", hint)
+		hint := orPlaceholder(a.CloseQuestionHint, "提问")
+		return fmt.Sprintf("关闭「%s」暂不可用，稍后再试", hint)
+
+	case "seek_goods":
+		return fmt.Sprintf("求购「%s」暂不可检索，稍后再试",
+			orPlaceholder(a.SeekHint, "物品"))
 
 	default:
 		return ""

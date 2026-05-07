@@ -14,7 +14,7 @@ import (
 
 var (
 	reChitChatBizHint = regexp.MustCompile(
-		`面议|二手|求助|有偿|已出|已找到|下架旧的|关闭提问|收购|求购|拼车|代取|代课|转让|闲置`)
+		`面议|二手|求助|有偿|已出|已找到|下架旧的|关闭提问|收购|求购|拼车|代取|代课|转让|闲置|收「|收[^到]`)
 	reChitChatPrice = regexp.MustCompile(
 		`\d+(?:\.\d+)?\s*[元块￥¥]|\d+(?:\.\d+)?[rR]`)
 )

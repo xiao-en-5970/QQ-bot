@@ -57,6 +57,7 @@ type RecognizeInput struct {
 //   - "publish_answer"    针对群内某条提问提交回答
 //   - "off_shelf"         下架自己之前挂的商品
 //   - "close_question"    关闭自己之前发的提问
+//   - "seek_goods"        求购/收购/收某物——只检索在售二手，不落库
 //   - "none"              不是业务动作（闲聊 / 噪声 / 不确定都归这里）
 type RecognizeAction struct {
 	Type       string  `json:"type"`
@@ -84,6 +85,9 @@ type RecognizeAction struct {
 	OffShelfHint      string `json:"off_shelf_hint,omitempty"`      // "鞋架"、"U型枕"等；空 = 用户没指明，bot 应反问消歧
 	CloseQuestionHint string `json:"close_question_hint,omitempty"` // 同上
 
+	// seek_goods：检索关键词（物品名）
+	SeekHint string `json:"seek_hint,omitempty"`
+
 	// 引用
 	ImageMessageIDs  []int64 `json:"image_message_ids,omitempty"`  // 该动作关联的图片消息 ID（用于绑商品图）
 	SourceMessageIDs []int64 `json:"source_message_ids,omitempty"` // 该动作来自哪些消息（含主文本 + 图）
@@ -104,7 +108,7 @@ type RecognizeResult struct {
 const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一段同一发送者的连续 QQ 群消息（已按时间排好），
 你要判断里面有哪些"业务动作"，并以严格 JSON 形式输出结果。
 
-## 5 类业务动作
+## 6 类业务动作
 
 | Type | 触发场景 | 关键字段 |
 |---|---|---|
@@ -113,6 +117,7 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
 | publish_answer   | 用户在回复群里**别人最近**的提问 | answer_hint_to(被回答的提问关键词), answer_content |
 | off_shelf        | 用户表示自己之前的商品已经卖出/不卖了。例:"已出"、"鞋架已出"、"不卖了" | off_shelf_hint(关键词，没指明就空字符串) |
 | close_question   | 用户表示自己之前的提问已经解决/不需要了。例:"已找到"、"题库已找到" | close_question_hint |
+| seek_goods       | 用户**想买**二手：明确「收 / 求购 / 收购」+ 物品名。例:"收鞋架"、"收「U型枕」"、"求购鼠标"、"收购教材"。**不要**把「收到」「收起」「收录」「收尾」等当成求购 | seek_hint(物品关键词，必填且具体) |
 | none             | 闲聊 / 噪声 / 模糊不清 / 信息不全到没法落库 | reason 给一句话说明判定理由 |
 
 ## 关键规则
@@ -216,7 +221,8 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
    - 没提就空字符串
 10. **off_shelf_hint / close_question_hint**:
     - 用户明确说哪个商品已出（"鞋架已出"）→ hint 写"鞋架"
-    - 用户没指明（"已出"、"已找到"）→ hint 写空字符串；bot 后续会反问消歧
+    - 用户没指明（"已出"、"已找到"、"是" 表示已卖出）→ hint 写空字符串；bot 后续会反问消歧
+    - 用户明确否定未出（"不是"、"没出"、"还在"）→ type=none，不要 off_shelf
 11. **time 字段**只是辅助你判断"刚才发"和"几分钟前发"的时间感，不要在输出里复读时间。
 12. **source_message_ids**: 每个 action 必填，列出所有用于这次判定的消息 ID（含主文本 + 关联图片）。
 13. **多图 / 文字主导原则**（适用于所有 type，不仅 publish_question）:
@@ -239,6 +245,13 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
 
     - "出了" / "都出了" / "拿出来" / "出门" 这些**没有商品名 + 没有价格**的句子，**不**算 publish_good 也不算 off_shelf。
     - 真要识别为 off_shelf 至少需要：商品名 / 类目词 / "刚才那个" 等明确指代之一。
+
+16. **seek_goods（求购检索）**:
+
+    - 必须像「想买二手」：含 **收/求购/收购** 且后面跟**具体物品名**（至少 2 字或明确名词）。seek_hint 只写物品名，不要写动词。
+    - **Hard reject**：「收到」「收到了」「收起」「收录」「收尾」等明显不是求购 → type=none。
+    - 与 publish_good 互斥：用户同时在卖东西（出/卖+价）→ 不要 seek_goods。
+    - 本动作**不落库**，bot 只在平台有在售匹配时 @ 用户给提示。
 
 ## 输出格式（严格 JSON，不要任何额外内容）
 

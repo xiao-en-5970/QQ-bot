@@ -61,7 +61,7 @@
 
 ## 请求下架（手动审计的兜底）
 
-`POST /api/v1/goods/:id/request-off-shelf` —— bot 通知卖家："你的商品 XX 是不是已出？回'是'就下架"
+`POST /api/v1/goods/:id/request-off-shelf` —— bot @ 卖家：`「标题」已经出了吗？请回答是或不是。`（不出现 goods_id）
 
 **手动审计**避免 app 用户恶意点别人的"已出"。
 
@@ -71,7 +71,7 @@
   2. fallback 到 `users.created_in_group_id`（owner 首见群）→ `SendGroup` @ 卖家
   3. 都缺失 / 全失败 → `CheckFriend`，是 bot 好友就 `SendPrivate`；否则前端弹"请直接通过 QQ 联系"
 - 三级全失败时清限流锁让用户能重试
-- 卖家在 QQ 群里回 "是 / 已出 / 鞋架已出" 等 → 走现有 `off_shelf` 识别链路自动下架（不需要新逻辑）
+- 卖家在群里回「是 / 不是 / 已出 / 某某已出」等 → 「是 / 已出 / 带关键词的已出」走现有 `off_shelf`；「不是」不按下架处理
 
 字段持久化路径：
 - `goods.created_in_group_id` 由 `BotPublishGood` 在落库时写入（`PublishGoodReq.GroupID = bot 收到该消息的 QQ 群号`）；非 bot 路径上架（管理员 / app 直传）的商品保持 NULL
