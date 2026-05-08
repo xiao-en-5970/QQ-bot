@@ -428,7 +428,7 @@ type Config struct {
 //   - GPT_API_KEY / MODEL / RECOGNIZE_MODEL / QUOTA_* / MAX_TOOL_ROUNDS
 //   - COMMANDS_ENABLED / COMMANDS_DEFAULT
 //   - TOOLS_*
-//   - BOT_OPS_GROUP_ID
+//   - BOT_OPS_GROUP_ID / BOT_OPS_GROUP_IDS（运维群列表；下次 @bot 时立即生效）
 //
 // 哪些字段必须**重启**进程才生效：
 //
@@ -438,6 +438,10 @@ type Config struct {
 //   - LOG_*                                                         （logger 已初始化）
 //
 // 简单原则：跟"已建立的连接 / 已开始的监听"相关的字段都需重启。
+//
+// **特别提醒**：reload 只覆盖**配置值**，不覆盖**编译后的代码逻辑**。
+// 改了 Go 源代码（新增/修改 handler / 分流逻辑 / dao / dispatch 等）必须
+// `go build` 后重启 bot 进程；SIGHUP 不会让新代码生效。
 func Init() (err error) {
 	// 启动期：先把 .env 加进进程 env（不覆盖已有），让 viper.AutomaticEnv 看到 .env 的值
 	loadedEnvPath = pickFirstExisting(envFileCandidates)
