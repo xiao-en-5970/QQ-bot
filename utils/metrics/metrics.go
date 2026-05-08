@@ -1,23 +1,60 @@
-// Package metrics 维护 QQ-bot 进程级运行计数，给 internal API /internal/metrics 端点输出。
+// Package metrics 维护 QQ-bot 进程级运行计数 + 最近事件 + 每分钟时序，
+// 供 internal API /internal/metrics 端点输出，再由 hfut admin 面板展示。
 //
 // 设计：
 //
-//   - 全部 atomic 计数，不引入锁；Snapshot 时一次性 Load 所有字段。
-//   - 不依赖外部 TSDB / Prometheus；进程重启清零；够给 admin 面板查询用。
-//   - 业务上有意义的桶按"事件类型"分：消息接收 / Kimi 识别 / dispatch 结果 /
-//     私聊请求 / 群接入申请 / 限流命中 / quotaGate 状态。
-//
-// 调用方式：
-//
-//	metrics.IncWSMessage("group")
-//	metrics.IncDispatch("publish_good", "success")
+//   - 计数器全部 atomic，不引入锁；快照时一次性 Load。
+//   - 最近事件 ring buffer（默认 50）：保留近期上架 / 求物品 / 下架事件的细节，
+//     方便运维面板 hover 看到 "时间 + 群 + 用户 + 标题 + 模型 reason + outcome"。
+//   - 每分钟时序：保留过去 60 分钟，按 (epochMinute -> bucket) 聚合，给前端画折线。
+//   - 不引入外部 TSDB；进程重启清零。
 package metrics
 
 import (
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// recentEventsCap 保留最近 N 条 dispatch 事件
+const recentEventsCap = 50
+
+// seriesWindowMin 时序保留的窗口大小（分钟）
+const seriesWindowMin = 60
+
+// DispatchEvent 单条 dispatch 事件——前端表格展示用。
+type DispatchEvent struct {
+	TS         string  `json:"ts"`
+	GroupID    int64   `json:"group_id"`
+	UserID     int64   `json:"user_id"`
+	UserCard   string  `json:"user_card,omitempty"`
+	ActionType string  `json:"action_type"`
+	Outcome    string  `json:"outcome"`
+	Title      string  `json:"title,omitempty"`
+	Category   int     `json:"category,omitempty"`
+	Negotiable bool    `json:"negotiable,omitempty"`
+	Price      float64 `json:"price,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
+	Reason     string  `json:"reason,omitempty"`
+	AckText    string  `json:"ack_text,omitempty"`
+}
+
+// RecordDispatchInput 调用 RecordDispatchEvent 的参数。把字段拆开避免上层 import 循环。
+type RecordDispatchInput struct {
+	GroupID    int64
+	UserID     int64
+	UserCard   string
+	ActionType string
+	Outcome    string
+	Title      string
+	Category   int
+	Negotiable bool
+	Price      float64
+	Confidence float64
+	Reason     string
+	AckText    string
+}
 
 type counters struct {
 	startedAt time.Time
@@ -45,11 +82,52 @@ type counters struct {
 
 	// 运维通知
 	opsNotifications atomic.Int64
+
+	// 最近事件 ring buffer（dispatch 全量明细）
+	eventsMu sync.Mutex
+	events   []DispatchEvent
+
+	// 每分钟时序：epochMinute -> {ws, recognize, dispatch_success}
+	seriesMu sync.Mutex
+	series   map[int64]*minuteBucket
+}
+
+// minuteBucket 一分钟内的累计；切到下一分钟会新建。
+type minuteBucket struct {
+	WSMsgs            int64 `json:"ws_msgs"`
+	RecognizeCalled   int64 `json:"recognize_called"`
+	RecognizeSuccess  int64 `json:"recognize_success"`
+	DispatchSuccess   int64 `json:"dispatch_success"`
+	DispatchFail      int64 `json:"dispatch_fail"`
 }
 
 var c = &counters{
 	startedAt: time.Now(),
 	dispatch:  make(map[string]*atomic.Int64),
+	events:    make([]DispatchEvent, 0, recentEventsCap),
+	series:    make(map[int64]*minuteBucket),
+}
+
+func currentMinute() int64 { return time.Now().Truncate(time.Minute).Unix() }
+
+// touchSeries 在当前分钟的 bucket 上调 fn(b)，桶不存在自动创建并 GC 老桶。
+func touchSeries(fn func(*minuteBucket)) {
+	c.seriesMu.Lock()
+	defer c.seriesMu.Unlock()
+	now := currentMinute()
+	b, ok := c.series[now]
+	if !ok {
+		b = &minuteBucket{}
+		c.series[now] = b
+		// GC 老桶——保留最近 seriesWindowMin 分钟
+		cutoff := now - int64(seriesWindowMin*60)
+		for k := range c.series {
+			if k < cutoff {
+				delete(c.series, k)
+			}
+		}
+	}
+	fn(b)
 }
 
 // IncWSMessage 收到一条来自 NapCat 的消息事件。
@@ -61,6 +139,9 @@ func IncWSMessage(kind string) {
 		c.wsPrivateMsgs.Add(1)
 	default:
 		c.wsIgnored.Add(1)
+	}
+	if kind == "group" || kind == "private" {
+		touchSeries(func(b *minuteBucket) { b.WSMsgs++ })
 	}
 }
 
@@ -75,6 +156,12 @@ func IncRecognize(outcome string) {
 	default:
 		c.recognizeFail.Add(1)
 	}
+	touchSeries(func(b *minuteBucket) {
+		b.RecognizeCalled++
+		if outcome == "success" {
+			b.RecognizeSuccess++
+		}
+	})
 }
 
 // IncDispatch 一条 action 的分发结果，按 actionType + outcome 分桶。
@@ -90,6 +177,41 @@ func IncDispatch(actionType, outcome string) {
 	}
 	c.mu.Unlock()
 	bucket.Add(1)
+	touchSeries(func(b *minuteBucket) {
+		switch outcome {
+		case "success":
+			b.DispatchSuccess++
+		case "fail":
+			b.DispatchFail++
+		}
+	})
+}
+
+// RecordDispatchEvent 把一次识别 + dispatch 的全量明细放入最近事件 ring。
+//
+// 调用时机：autoReply 收到 ackResult 后。即便 outcome=ignore 也记一条，便于排查"为什么没有响应"。
+func RecordDispatchEvent(in RecordDispatchInput) {
+	ev := DispatchEvent{
+		TS:         time.Now().Format(time.RFC3339),
+		GroupID:    in.GroupID,
+		UserID:     in.UserID,
+		UserCard:   in.UserCard,
+		ActionType: in.ActionType,
+		Outcome:    in.Outcome,
+		Title:      in.Title,
+		Category:   in.Category,
+		Negotiable: in.Negotiable,
+		Price:      in.Price,
+		Confidence: in.Confidence,
+		Reason:     in.Reason,
+		AckText:    in.AckText,
+	}
+	c.eventsMu.Lock()
+	defer c.eventsMu.Unlock()
+	c.events = append(c.events, ev)
+	if len(c.events) > recentEventsCap {
+		c.events = c.events[len(c.events)-recentEventsCap:]
+	}
 }
 
 // IncPrivateAccessRequest 群接入申请数。
@@ -110,19 +232,60 @@ func Snapshot() map[string]any {
 	}
 	c.mu.Unlock()
 
+	c.eventsMu.Lock()
+	events := make([]DispatchEvent, len(c.events))
+	copy(events, c.events)
+	c.eventsMu.Unlock()
+
+	// 时序按时间升序输出，最多 seriesWindowMin 个点
+	type seriesPoint struct {
+		Minute            int64 `json:"minute"`
+		WSMsgs            int64 `json:"ws_msgs"`
+		RecognizeCalled   int64 `json:"recognize_called"`
+		RecognizeSuccess  int64 `json:"recognize_success"`
+		DispatchSuccess   int64 `json:"dispatch_success"`
+		DispatchFail      int64 `json:"dispatch_fail"`
+	}
+	c.seriesMu.Lock()
+	keys := make([]int64, 0, len(c.series))
+	for k := range c.series {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	points := make([]seriesPoint, 0, len(keys))
+	for _, k := range keys {
+		b := c.series[k]
+		points = append(points, seriesPoint{
+			Minute:           k,
+			WSMsgs:           b.WSMsgs,
+			RecognizeCalled:  b.RecognizeCalled,
+			RecognizeSuccess: b.RecognizeSuccess,
+			DispatchSuccess:  b.DispatchSuccess,
+			DispatchFail:     b.DispatchFail,
+		})
+	}
+	c.seriesMu.Unlock()
+
+	// 把最近事件按时间倒序展示（最新在前）
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+
 	return map[string]any{
-		"started_at":      c.startedAt.Format(time.RFC3339),
-		"uptime_seconds":  int64(time.Since(c.startedAt).Seconds()),
-		"ws_group_msgs":   c.wsGroupMsgs.Load(),
-		"ws_private_msgs": c.wsPrivateMsgs.Load(),
-		"ws_ignored":      c.wsIgnored.Load(),
-		"recognize_called":  c.recognizeCalled.Load(),
-		"recognize_success": c.recognizeSuccess.Load(),
-		"recognize_fail":    c.recognizeFail.Load(),
-		"quota_cooling":     c.quotaCooling.Load(),
-		"dispatch":          dispatch,
+		"started_at":              c.startedAt.Format(time.RFC3339),
+		"uptime_seconds":          int64(time.Since(c.startedAt).Seconds()),
+		"ws_group_msgs":           c.wsGroupMsgs.Load(),
+		"ws_private_msgs":         c.wsPrivateMsgs.Load(),
+		"ws_ignored":              c.wsIgnored.Load(),
+		"recognize_called":        c.recognizeCalled.Load(),
+		"recognize_success":       c.recognizeSuccess.Load(),
+		"recognize_fail":          c.recognizeFail.Load(),
+		"quota_cooling":           c.quotaCooling.Load(),
+		"dispatch":                dispatch,
 		"private_access_requests": c.privateAccessReq.Load(),
 		"rate_limit_hits":         c.rateLimitHits.Load(),
 		"ops_notifications":       c.opsNotifications.Load(),
+		"recent_events":           events,
+		"series":                  points,
 	}
 }

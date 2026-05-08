@@ -145,10 +145,9 @@ func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *mod
 		go m.processSnapshot(key, snapshot)
 		return
 	}
-	// 单条、纯文字、不像任何业务语料、regex 也认不出 → 立刻丢桶（不等 silence 窗口，也不调 Kimi）
-	if tryInstantSilentChitChat(key, b) {
-		return
-	}
+	// 不再做正则预过滤——所有消息都进窗口，等 silence 触发后由 Kimi 统一判定。
+	// 这避免了"上架一个 X" 这种短句被关键词白名单漏掉。代价是 Kimi 调用量略增；
+	// 当 quota 冷却时上层会静默丢弃当前窗口（详见 skill/bot/recognition.md）。
 }
 
 // scanOnce 扫描一遍所有桶，把已经"沉默够久"的桶 flush 出去。
@@ -317,6 +316,33 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 			outcome = "other"
 		}
 		metrics.IncDispatch(a.Type, outcome)
+		// 写最近事件（运维面板"事件流"展示）：标题 / 价格 / 置信度 / 模型 reason 一并保留，
+		// 便于事后复盘"为什么把这条群消息识别成上架"。
+		title := strings.TrimSpace(a.Title)
+		if title == "" {
+			title = strings.TrimSpace(a.SeekHint)
+		}
+		if title == "" {
+			title = strings.TrimSpace(a.QuestionTitle)
+		}
+		var price float64
+		if a.Price != nil {
+			price = *a.Price
+		}
+		metrics.RecordDispatchEvent(metrics.RecordDispatchInput{
+			GroupID:    key.GroupID,
+			UserID:     key.UserID,
+			UserCard:   first.UserCard,
+			ActionType: a.Type,
+			Outcome:    outcome,
+			Title:      title,
+			Category:   a.Category,
+			Negotiable: a.Negotiable,
+			Price:      price,
+			Confidence: a.Confidence,
+			Reason:     a.Reason,
+			AckText:    truncateForLog(res.Text, 200),
+		})
 
 		// 按 verbosity 决定要不要真发到群里
 		verbose := conf.Cfg.Group.IsAutoReplyVerbose()
