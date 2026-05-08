@@ -93,12 +93,26 @@ type counters struct {
 }
 
 // minuteBucket 一分钟内的累计；切到下一分钟会新建。
+//
+// 字段尽量"扁平 + 直白"，因为 hfut 端 metrics_persister 会按 json tag 名把每个字段
+// 落到 metric_minute(source='bot', metric=<tag>)；面板再按时间窗 SUM 拼回累计值。
+//
+// 新增字段必须**只增不删不改名**——历史 metric_minute 行用的就是这些 tag 作为 metric 名，
+// 改名会让历史数据查不出来。
 type minuteBucket struct {
-	WSMsgs            int64 `json:"ws_msgs"`
-	RecognizeCalled   int64 `json:"recognize_called"`
-	RecognizeSuccess  int64 `json:"recognize_success"`
-	DispatchSuccess   int64 `json:"dispatch_success"`
-	DispatchFail      int64 `json:"dispatch_fail"`
+	WSMsgs           int64 `json:"ws_msgs"`         // 群+私聊合计
+	WSGroupMsgs      int64 `json:"ws_group_msgs"`   // 仅群消息
+	WSPrivateMsgs    int64 `json:"ws_private_msgs"` // 仅私聊
+	RecognizeCalled  int64 `json:"recognize_called"`
+	RecognizeSuccess int64 `json:"recognize_success"`
+	RecognizeFail    int64 `json:"recognize_fail"`
+	QuotaCooling     int64 `json:"quota_cooling"`
+	DispatchSuccess  int64 `json:"dispatch_success"`
+	DispatchFail     int64 `json:"dispatch_fail"`
+	DispatchOther    int64 `json:"dispatch_other"` // dup / ignore / ask_user 等
+	RateLimit        int64 `json:"rate_limit"`
+	PrivateAccess    int64 `json:"private_access"`
+	OpsNotify        int64 `json:"ops_notify"`
 }
 
 var c = &counters{
@@ -141,7 +155,14 @@ func IncWSMessage(kind string) {
 		c.wsIgnored.Add(1)
 	}
 	if kind == "group" || kind == "private" {
-		touchSeries(func(b *minuteBucket) { b.WSMsgs++ })
+		touchSeries(func(b *minuteBucket) {
+			b.WSMsgs++
+			if kind == "group" {
+				b.WSGroupMsgs++
+			} else {
+				b.WSPrivateMsgs++
+			}
+		})
 	}
 }
 
@@ -158,8 +179,13 @@ func IncRecognize(outcome string) {
 	}
 	touchSeries(func(b *minuteBucket) {
 		b.RecognizeCalled++
-		if outcome == "success" {
+		switch outcome {
+		case "success":
 			b.RecognizeSuccess++
+		case "quota_cooling":
+			b.QuotaCooling++
+		default:
+			b.RecognizeFail++
 		}
 	})
 }
@@ -167,6 +193,8 @@ func IncRecognize(outcome string) {
 // IncDispatch 一条 action 的分发结果，按 actionType + outcome 分桶。
 //
 // outcome 推荐取值：success / dup / fail / ignore / ask_user。
+// 时序桶里 success / fail 单独记，其余统一进 dispatch_other 避免 cardinality 爆炸；
+// cumulative dispatch map 仍按 action:outcome 全维度细分（snapshot 时整体输出）。
 func IncDispatch(actionType, outcome string) {
 	key := actionType + ":" + outcome
 	c.mu.Lock()
@@ -183,6 +211,8 @@ func IncDispatch(actionType, outcome string) {
 			b.DispatchSuccess++
 		case "fail":
 			b.DispatchFail++
+		default:
+			b.DispatchOther++
 		}
 	})
 }
@@ -215,13 +245,22 @@ func RecordDispatchEvent(in RecordDispatchInput) {
 }
 
 // IncPrivateAccessRequest 群接入申请数。
-func IncPrivateAccessRequest() { c.privateAccessReq.Add(1) }
+func IncPrivateAccessRequest() {
+	c.privateAccessReq.Add(1)
+	touchSeries(func(b *minuteBucket) { b.PrivateAccess++ })
+}
 
 // IncRateLimit dispatch 限流命中。
-func IncRateLimit() { c.rateLimitHits.Add(1) }
+func IncRateLimit() {
+	c.rateLimitHits.Add(1)
+	touchSeries(func(b *minuteBucket) { b.RateLimit++ })
+}
 
 // IncOpsNotify 给运维群发了一条通知。
-func IncOpsNotify() { c.opsNotifications.Add(1) }
+func IncOpsNotify() {
+	c.opsNotifications.Add(1)
+	touchSeries(func(b *minuteBucket) { b.OpsNotify++ })
+}
 
 // Snapshot 当前计数快照——/internal/metrics 端点输出用。
 func Snapshot() map[string]any {
@@ -237,14 +276,23 @@ func Snapshot() map[string]any {
 	copy(events, c.events)
 	c.eventsMu.Unlock()
 
-	// 时序按时间升序输出，最多 seriesWindowMin 个点
+	// 时序按时间升序输出，最多 seriesWindowMin 个点。
+	// 字段保持与 minuteBucket 一致——hfut persister 直接按 json key 落盘。
 	type seriesPoint struct {
-		Minute            int64 `json:"minute"`
-		WSMsgs            int64 `json:"ws_msgs"`
-		RecognizeCalled   int64 `json:"recognize_called"`
-		RecognizeSuccess  int64 `json:"recognize_success"`
-		DispatchSuccess   int64 `json:"dispatch_success"`
-		DispatchFail      int64 `json:"dispatch_fail"`
+		Minute           int64 `json:"minute"`
+		WSMsgs           int64 `json:"ws_msgs"`
+		WSGroupMsgs      int64 `json:"ws_group_msgs"`
+		WSPrivateMsgs    int64 `json:"ws_private_msgs"`
+		RecognizeCalled  int64 `json:"recognize_called"`
+		RecognizeSuccess int64 `json:"recognize_success"`
+		RecognizeFail    int64 `json:"recognize_fail"`
+		QuotaCooling     int64 `json:"quota_cooling"`
+		DispatchSuccess  int64 `json:"dispatch_success"`
+		DispatchFail     int64 `json:"dispatch_fail"`
+		DispatchOther    int64 `json:"dispatch_other"`
+		RateLimit        int64 `json:"rate_limit"`
+		PrivateAccess    int64 `json:"private_access"`
+		OpsNotify        int64 `json:"ops_notify"`
 	}
 	c.seriesMu.Lock()
 	keys := make([]int64, 0, len(c.series))
@@ -258,10 +306,18 @@ func Snapshot() map[string]any {
 		points = append(points, seriesPoint{
 			Minute:           k,
 			WSMsgs:           b.WSMsgs,
+			WSGroupMsgs:      b.WSGroupMsgs,
+			WSPrivateMsgs:    b.WSPrivateMsgs,
 			RecognizeCalled:  b.RecognizeCalled,
 			RecognizeSuccess: b.RecognizeSuccess,
+			RecognizeFail:    b.RecognizeFail,
+			QuotaCooling:     b.QuotaCooling,
 			DispatchSuccess:  b.DispatchSuccess,
 			DispatchFail:     b.DispatchFail,
+			DispatchOther:    b.DispatchOther,
+			RateLimit:        b.RateLimit,
+			PrivateAccess:    b.PrivateAccess,
+			OpsNotify:        b.OpsNotify,
 		})
 	}
 	c.seriesMu.Unlock()
