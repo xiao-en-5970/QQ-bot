@@ -343,13 +343,44 @@ type Internal struct {
 
 // Bot bot 自身的运营 / 通知配置——跟"对内通知群"相关的开关都集中在这里。
 //
-// OpsGroupID    bot 的"对内通知 / 操作记录"群号；任何上架 / 群接入申请等关键事件都会
+// OpsGroupIDs   bot 的"对内通知 / 操作记录"群号列表；任何上架 / 群接入申请等关键事件都会
 //
-//	转发一份到这个群里，方便运营盯。0 = 不通知，bot 不主动给任何群上报；
-//	生产推荐显式配上一个仅运营可见的 QQ 群号。
-//	env: BOT_OPS_GROUP_ID
+//	转发一份到这些群里，方便运营盯。空 = 不通知。
+//	env: BOT_OPS_GROUP_IDS（逗号分隔，例如 "1084352497,1234567890"）
+//	兼容老的 BOT_OPS_GROUP_ID（单值）：未配置 IDS 但配了 ID 时按单元素列表使用。
+//
+//	所有 OpsGroup 同时是"运维查询群"——在这些群里 @bot 提问会进 ops_query 路径，
+//	bot 调 LLM 生成只读 SQL，调 hfut /bot/admin/sql 执行后把结果回到群里。
+//	详见 logic/ops_query.go 与 skill/bot/ops_query.md。
 type Bot struct {
+	OpsGroupIDs []int64 `mapstructure:"ops_group_ids,omitempty"`
+
+	// OpsGroupID 旧字段——保留作为向后兼容入口；reload 时会被合并进 OpsGroupIDs。
+	// 新部署请直接使用 OPS_GROUP_IDS。
 	OpsGroupID int64 `mapstructure:"ops_group_id,omitempty"`
+}
+
+// IsOpsGroup 群号是否运维群（命中任意一个 OpsGroupIDs）。
+func (b Bot) IsOpsGroup(groupID int64) bool {
+	if groupID == 0 {
+		return false
+	}
+	for _, id := range b.OpsGroupIDs {
+		if id == groupID {
+			return true
+		}
+	}
+	return false
+}
+
+// PrimaryOpsGroup 默认通知群——返回 OpsGroupIDs 第一个，列表为空时返回 0。
+//
+// 给"老 NotifyOps 调用单群发"路径兜底；新调用建议遍历 OpsGroupIDs 全发。
+func (b Bot) PrimaryOpsGroup() int64 {
+	if len(b.OpsGroupIDs) == 0 {
+		return 0
+	}
+	return b.OpsGroupIDs[0]
 }
 
 type Config struct {
@@ -664,7 +695,7 @@ func bindEnvKeys() {
 		"gpt.model", "gpt.recognize_model", "gpt.quota_cooldown_seconds", "gpt.quota_error_threshold",
 		"commands.enabled", "commands.default",
 		"internal.port",
-		"bot.ops_group_id",
+		"bot.ops_group_id", "bot.ops_group_ids",
 	}
 	for _, k := range keys {
 		_ = viper.BindEnv(k)
@@ -738,11 +769,18 @@ func applyDefaults(c *Config) {
 		c.Group.AutoReplyMaxWindowSize = 20
 	}
 
-	// 运维通知群默认值：1084352497（项目当前内部运营群）。生产部署可用
-	// BOT_OPS_GROUP_ID 覆盖；显式置 0 时所有运维通知会被静默忽略。
-	if c.Bot.OpsGroupID == 0 {
-		c.Bot.OpsGroupID = 1084352497
+	// 运维通知群默认值：1084352497（项目当前内部运营群）。
+	// 优先级：OpsGroupIDs（新）> OpsGroupID（兼容）> 内置默认。
+	// 显式配 OpsGroupIDs=[]（空数组）时所有运维通知静默忽略。
+	if len(c.Bot.OpsGroupIDs) == 0 {
+		if c.Bot.OpsGroupID != 0 {
+			c.Bot.OpsGroupIDs = []int64{c.Bot.OpsGroupID}
+		} else {
+			c.Bot.OpsGroupIDs = []int64{1084352497}
+		}
 	}
+	// 同步 OpsGroupID 到第一项，方便老调用方继续 work（PrimaryOpsGroup 也是这个）
+	c.Bot.OpsGroupID = c.Bot.PrimaryOpsGroup()
 }
 
 func isWindows() bool {

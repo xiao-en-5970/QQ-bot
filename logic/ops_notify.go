@@ -1,12 +1,15 @@
-// Package logic 的 ops_notify.go 把"对内通知"统一发到 conf.Bot.OpsGroupID。
+// Package logic 的 ops_notify.go 把"对内通知"统一发到 conf.Bot.OpsGroupIDs（可多群）。
 //
 // 触发场景：
 //   - 任何成功的上架（publish_good / publish_question / seek_goods）
 //   - 群管理员私聊申请接入 bot
 //   - 其它需要运营盯的关键事件（限流命中、识别失败长时间、quota 冷却等可后续接入）
 //
-// 当 conf.Bot.OpsGroupID == 0 时本文件所有函数都静默 no-op。任何发送失败仅 log warn，
+// 当 conf.Bot.OpsGroupIDs 为空时本文件所有函数都静默 no-op。任何发送失败仅 log warn，
 // 不让"通知"挡到主路径业务（上架成功 ≠ 通知发出，业务层不依赖通知是否到达）。
+//
+// 多群行为：循环把同一份文本发到每个 ops 群；对每个群的失败独立 log，不互相阻塞。
+// metrics.IncOpsNotify 每条**成功发出**才计数一次（多群发就计 N 次），方便面板观察。
 package logic
 
 import (
@@ -20,15 +23,16 @@ import (
 	zaplog "qq_bot/utils/zap"
 )
 
-// NotifyOps 把一段文本发到运维群。
+// NotifyOps 把一段文本发到所有运维群。
 //
 // httpClient 来自调用方（保持与触发动作同一连接池友好），nil 时退化用全局默认 client——
 // 多数 dispatch 路径都已经带了 client，nil 仅作为防御兜底。
 //
-// 返回 error 仅供调用方记录；所有 dispatch 路径都不应该因为 NotifyOps 失败而失败。
+// 多群发送任意一个失败仅 log warn，其它继续发；所有 dispatch 路径都不应该因为
+// NotifyOps 失败而失败。
 func NotifyOps(client *http.Client, text string) {
-	gid := conf.Cfg.Bot.OpsGroupID
-	if gid == 0 {
+	gids := conf.Cfg.Bot.OpsGroupIDs
+	if len(gids) == 0 {
 		return
 	}
 	text = strings.TrimSpace(text)
@@ -38,11 +42,17 @@ func NotifyOps(client *http.Client, text string) {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	if err := SendGroupText(client, gid, text); err != nil {
-		zaplog.Logger.Warnf("ops notify 发送失败 ops_group=%d: %v err_text=%q", gid, err, truncateForLog(text, 200))
-		return
+	for _, gid := range gids {
+		if gid == 0 {
+			continue
+		}
+		if err := SendGroupText(client, gid, text); err != nil {
+			zaplog.Logger.Warnf("ops notify 发送失败 ops_group=%d: %v err_text=%q",
+				gid, err, truncateForLog(text, 200))
+			continue
+		}
+		metrics.IncOpsNotify()
 	}
-	metrics.IncOpsNotify()
 }
 
 // NotifyOpsPublish 标准化"上架事件"文案——所有 publish_* / seek_goods 成功后调一下。
@@ -56,7 +66,7 @@ func NotifyOps(client *http.Client, text string) {
 //	title      标题（已清理空白）
 //	extra      可选附加摘要：价格 / 地点 / 配图数等，多行用 ' / ' 分隔
 func NotifyOpsPublish(client *http.Client, groupID, userID int64, userCard, kind, title string, extra ...string) {
-	if conf.Cfg.Bot.OpsGroupID == 0 {
+	if len(conf.Cfg.Bot.OpsGroupIDs) == 0 {
 		return
 	}
 	var b strings.Builder
@@ -83,7 +93,7 @@ func NotifyOpsPublish(client *http.Client, groupID, userID int64, userCard, kind
 //	role          申请人在目标群的角色（owner / admin / member / unknown / not_in_group）
 //	rawText       发起人原始消息（截断后），方便人工核查
 func NotifyOpsGroupAccessRequest(client *http.Client, requesterQQ int64, requesterName string, targetGroup int64, role string, rawText string) {
-	if conf.Cfg.Bot.OpsGroupID == 0 {
+	if len(conf.Cfg.Bot.OpsGroupIDs) == 0 {
 		return
 	}
 	var b strings.Builder

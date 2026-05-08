@@ -86,9 +86,21 @@ const skillReadMaxBytes = 32 * 1024
 //   - 顶层索引：rel 为空（已在外层规范成 "SKILL.md"）或 "SKILL.md"
 //   - bot 子树：rel 等于 "bot" 或以 "bot/" 开头
 //
-// 其它一律拒绝（含 hfut-union/**）。注意 rel 是已经 TrimSpace 过的相对路径，
-// 这里走纯字符串前缀匹配，简单可控；不依赖文件系统分隔符（slash 即可）。
+// 额外的"内部 skill"约定（最重要的安全规则）：
+//
+//	任何路径段以 "_" 开头的文件 / 目录都视为**内部 skill**，read_skill 一律拒绝读取。
+//	约定俗成：写给开发者 / 运维但**不希望普通用户的 LLM 对话看到**的能力描述（例如
+//	skill/bot/_ops_query.md 描述的运维 SQL 查询）放在 _ 开头文件里，避免 Kimi 在
+//	普通群聊里读到然后向无权访问者暴露这个能力的存在。
+//
+// 其它一律拒绝（含 hfut-union/**）。
 func isSkillPathAllowed(rel string) bool {
+	// 内部 skill 拒绝：任意路径段以 "_" 开头
+	for _, seg := range strings.Split(rel, "/") {
+		if strings.HasPrefix(seg, "_") {
+			return false
+		}
+	}
 	if rel == "" || rel == "SKILL.md" {
 		return true
 	}
@@ -120,7 +132,9 @@ func readSkillHandler(ctx context.Context, arguments string) (string, error) {
 	// 业务能力（hfut-union/）只暴露给开发者参考，不让 Kimi 在运行时拼 HTTP 调用，
 	// 必须走 bot 自己封装的工具集（publish_good / off_shelf 等）。
 	if !isSkillPathAllowed(rel) {
-		return fmt.Sprintf("ERROR: 路径 %q 不在允许范围内（仅允许 \"\" / \"SKILL.md\" / \"bot/**\"）。"+
+		// 故意不区分"路径不存在 vs 内部文件被拒"——避免错误信息本身泄露"哦原来有个
+		// _xxx.md 内部 skill"的事实。LLM 看到统一的"路径不在允许范围"会自己回退。
+		return fmt.Sprintf("ERROR: 路径 %q 不在允许范围内（仅允许 \"\" / \"SKILL.md\" / \"bot/**\"，且不含 \"_\" 开头的内部 skill）。"+
 			"如需调用 hfut 相关能力，请使用 bot 工具集中的 publish_good / off_shelf 等高层工具，"+
 			"而不是读 hfut-union 那套 API 文档。", rel), nil
 	}

@@ -68,6 +68,14 @@ func HandleAtMessage(client *http.Client, msg *model.Message) {
 	}
 
 	if isAtBot {
+		// 运维群里的 @bot 走"自然语言查询"路径——bot 调 LLM 生 SQL → 调 hfut 执行 → 回结果。
+		// 普通命令分发只在非运维群（或 OpsGroup 未配置时）启用，避免运维群里写 jm/pix 等
+		// 跟运维查询语义混淆。详见 logic/ops_query.go 与 skill/bot/ops_query.md。
+		if conf.Cfg.Bot.IsOpsGroup(msg.GroupID) {
+			text := extractFirstTextAfterAt(msg)
+			HandleOpsQuery(client, msg, text)
+			return
+		}
 		handleAtCommand(client, msg, botID)
 		return
 	}
@@ -145,6 +153,36 @@ func handleAutoReply(client *http.Client, msg *model.Message) {
 		userCard = msg.Sender.Nickname
 	}
 	autoReplyMgr.Push(msg.GroupID, msg.UserID, userCard, msg)
+}
+
+// extractFirstTextAfterAt 提取 @bot 之后的纯文本——给运维群 @ 提问用。
+//
+// 跟 handleAtCommand 不同：
+//   - handleAtCommand 只看 segment[1] 一个 text；
+//   - 这里把 segment[1:] 所有 text 拼起来，让运维写较长的问题不会被吞。
+//
+// 非 text 段（image/face 等）忽略；@ 段因为我们假设第一个是 @bot，后续若有再被 @ 的人
+// 也直接展开成 "@QQ" 文本（不影响 LLM 理解）。
+func extractFirstTextAfterAt(msg *model.Message) string {
+	if msg == nil || len(msg.Message) <= 1 {
+		return ""
+	}
+	var b strings.Builder
+	for _, seg := range msg.Message[1:] {
+		switch seg.Type {
+		case "text":
+			if td, err := model.AsTextData(seg.Data); err == nil {
+				b.WriteString(td.Text)
+			}
+		case "at":
+			if ad, err := model.AsAtData(seg.Data); err == nil {
+				b.WriteString("@")
+				b.WriteString(ad.QQ)
+				b.WriteByte(' ')
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // flattenMessageText 把 message segments 里所有 text 拼成一条字符串，方便 log / 传给后续逻辑。

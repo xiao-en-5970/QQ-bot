@@ -361,6 +361,40 @@ func (c *Client) CloseArticle(ctx context.Context, articleID uint, callerUserID 
 	return c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/api/v1/bot/articles/%d/close", articleID), body, nil)
 }
 
+// AdminSQLResp /api/v1/bot/admin/sql 的 data 字段反序列化。
+//
+// Rows 是 row × col 二维数组；每个 cell 是 driver scan 后再 normalize 过的 JSON 友好值
+// （time.Time → RFC3339 字符串 / []byte → 字符串 / 原始数值类型保留）。
+//
+// ColumnTypes 是 PG driver 给的 DatabaseTypeName，比如 "INT8" / "VARCHAR" / "TIMESTAMPTZ"，
+// 仅作元信息——bot 那边把结果格式化给运维群时只用 Columns + Rows 就够了。
+type AdminSQLResp struct {
+	Columns     []string `json:"columns"`
+	ColumnTypes []string `json:"column_types"`
+	Rows        [][]any  `json:"rows"`
+	RowCount    int      `json:"row_count"`
+	ElapsedMs   int64    `json:"elapsed_ms"`
+}
+
+// RunAdminSQL 在 hfut 后端跑一段只读 SQL（仅 select / with / explain / show / values）。
+//
+// limit ≤ 0 时由后端兜底为 200；最大 1000。SQL 静态检查 + PG 事务 READ ONLY 双保险，
+// 详见 hfut controller/bot_admin_sql.go。
+//
+// 这个方法**只该被运维查询路径**（logic/ops_query.go）调用——给 LLM 工具用，
+// 调用方需要先确认上下文是 ops 群消息，再把结果发回群里。普通业务路径不能用。
+func (c *Client) RunAdminSQL(ctx context.Context, sqlStr string, limit int) (*AdminSQLResp, error) {
+	body := map[string]any{"sql": sqlStr}
+	if limit > 0 {
+		body["limit"] = limit
+	}
+	var out AdminSQLResp
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/bot/admin/sql", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // UploadImageResp 转存图片成功后 hfut 返回的永久 URL。
 type UploadImageResp struct {
 	URL string `json:"url"`
