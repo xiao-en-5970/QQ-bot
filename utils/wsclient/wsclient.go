@@ -26,6 +26,7 @@ import (
 	"qq_bot/logic"
 	"qq_bot/model"
 	"qq_bot/utils/client_pool"
+	"qq_bot/utils/metrics"
 	zaplog "qq_bot/utils/zap"
 	"time"
 
@@ -154,6 +155,7 @@ func handleEvent(client *http.Client, raw []byte) {
 	}
 	switch hdr.MessageType {
 	case "group":
+		metrics.IncWSMessage("group")
 		var msg model.Message
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			zaplog.Logger.Errorf("WebSocket 群消息反序列化失败: %v, raw=%s", err, truncate(string(raw), 256))
@@ -161,6 +163,7 @@ func handleEvent(client *http.Client, raw []byte) {
 		}
 		logic.HandleAtMessage(client, &msg)
 	case "private":
+		metrics.IncWSMessage("private")
 		var msg model.Message
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			zaplog.Logger.Errorf("WebSocket 私聊消息反序列化失败: %v, raw=%s", err, truncate(string(raw), 256))
@@ -169,6 +172,7 @@ func handleEvent(client *http.Client, raw []byte) {
 		// 不阻塞 ws 读循环；NapCat API 调用 + 群转发会在子协程里同步走
 		go logic.HandlePrivateMessage(client, &msg)
 	default:
+		metrics.IncWSMessage(hdr.MessageType)
 		zaplog.Logger.Debugf("WebSocket 事件忽略: post_type=%s message_type=%s", hdr.PostType, hdr.MessageType)
 	}
 }

@@ -33,6 +33,7 @@ import (
 	"qq_bot/model"
 	"qq_bot/utils/client_pool"
 	"qq_bot/utils/kimi"
+	"qq_bot/utils/metrics"
 	zaplog "qq_bot/utils/zap"
 	"strings"
 	"sync"
@@ -254,18 +255,22 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 	switch {
 	case err == nil:
 		// 正常路径——result 来自 Kimi
+		metrics.IncRecognize("success")
 	case errors.Is(err, kimi.ErrQuotaCooling):
 		// quota gate 冷却期：直接静默（正则做语义识别不可靠，宁可漏不可错）
+		metrics.IncRecognize("quota_cooling")
 		zaplog.Logger.Infof("autoReply group=%d user=%d Kimi quota 冷却中，静默丢弃当前窗口",
 			key.GroupID, key.UserID)
 		return
 	case kimi.IsQuotaError(err):
 		// 单次 quota error——quota_gate 持续累计到阈值后会进入正式冷却。当前这条消息直接静默
 		// 不做识别——配额耗尽该停就停，避免任何低置信度兜底污染落库数据。
+		metrics.IncRecognize("quota_cooling")
 		zaplog.Logger.Warnf("autoReply group=%d user=%d Kimi 配额耗尽（单次），静默丢弃当前窗口（请尽快充值 / 换 API key）",
 			key.GroupID, key.UserID)
 		return
 	default:
+		metrics.IncRecognize("fail")
 		zaplog.Logger.Errorf("autoReply 识别失败 group=%d user=%d: %v", key.GroupID, key.UserID, err)
 		return
 	}
@@ -295,6 +300,23 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 			// 跑没接 hfut 的 bot 会保持完全静默（也是合理的）
 			res = ackResult{Text: buildAckMessage(a), Kind: ackKindFail}
 		}
+		// 计入运维指标：按 (action.Type, ackKind) 维度分桶，方便面板看上架成功 / 重复 / 失败比例
+		var outcome string
+		switch res.Kind {
+		case ackKindSuccess:
+			outcome = "success"
+		case ackKindDup:
+			outcome = "dup"
+		case ackKindAskUser:
+			outcome = "ask_user"
+		case ackKindFail:
+			outcome = "fail"
+		case ackKindIgnore:
+			outcome = "ignore"
+		default:
+			outcome = "other"
+		}
+		metrics.IncDispatch(a.Type, outcome)
 
 		// 按 verbosity 决定要不要真发到群里
 		verbose := conf.Cfg.Group.IsAutoReplyVerbose()

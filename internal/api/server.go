@@ -36,6 +36,7 @@ import (
 	"qq_bot/global"
 	"qq_bot/logic"
 	"qq_bot/utils/client_pool"
+	"qq_bot/utils/metrics"
 	zaplog "qq_bot/utils/zap"
 	"strings"
 	"time"
@@ -118,6 +119,8 @@ func Start(ctx context.Context) {
 	mux.HandleFunc("/internal/qq/check-friend", withJWTAuth(secretBytes, handleCheckFriend))
 	mux.HandleFunc("/internal/qq/send-private", withJWTAuth(secretBytes, handleSendPrivate))
 	mux.HandleFunc("/internal/qq/send-group", withJWTAuth(secretBytes, handleSendGroup))
+	// 运维指标快照——给 hfut /api/v1/admin/metrics 拉取展示
+	mux.HandleFunc("/internal/metrics", withJWTAuth(secretBytes, handleMetrics))
 	// 健康检查不需要 token，便于 docker compose / hfut 起来后探活
 	mux.HandleFunc("/internal/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeOK(w, map[string]string{"status": "ok"})
@@ -292,6 +295,13 @@ func handleSendGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeOK(w, map[string]string{"status": "ok"})
+}
+
+// handleMetrics POST /internal/metrics —— 返回 bot 进程级运行指标。
+//
+// 内部网络可达；hfut 端 admin /api/v1/admin/metrics 拉一次后合并展示。
+func handleMetrics(w http.ResponseWriter, r *http.Request) {
+	writeOK(w, metrics.Snapshot())
 }
 
 // writeOK 200 + 信封 code=200。

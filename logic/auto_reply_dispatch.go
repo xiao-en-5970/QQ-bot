@@ -31,6 +31,7 @@ import (
 	"qq_bot/model"
 	"qq_bot/utils/hfut"
 	"qq_bot/utils/kimi"
+	"qq_bot/utils/metrics"
 	zaplog "qq_bot/utils/zap"
 	"strings"
 	"time"
@@ -88,6 +89,7 @@ func dispatchActionToHfut(
 	// 也算一次 dispatch，但这一类不计数（避免用户被反问后立刻又触发限流）。
 	if isMutatingAction(action.Type) {
 		if ok, retry := dispatchLimiter.Allow(key); !ok {
+			metrics.IncRateLimit()
 			zaplog.Logger.Warnf("autoReply 限流命中 group=%d user=%d type=%s retry=%s",
 				key.GroupID, key.UserID, action.Type, retry)
 			return ackResult{

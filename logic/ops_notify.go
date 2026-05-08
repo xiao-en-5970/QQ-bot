@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"qq_bot/conf"
+	"qq_bot/utils/metrics"
 	zaplog "qq_bot/utils/zap"
 )
 
@@ -39,7 +40,9 @@ func NotifyOps(client *http.Client, text string) {
 	}
 	if err := SendGroupText(client, gid, text); err != nil {
 		zaplog.Logger.Warnf("ops notify 发送失败 ops_group=%d: %v err_text=%q", gid, err, truncateForLog(text, 200))
+		return
 	}
+	metrics.IncOpsNotify()
 }
 
 // NotifyOpsPublish 标准化"上架事件"文案——所有 publish_* / seek_goods 成功后调一下。

@@ -27,6 +27,7 @@ import (
 	"qq_bot/conf"
 	"qq_bot/model"
 	"qq_bot/service"
+	"qq_bot/utils/metrics"
 	zaplog "qq_bot/utils/zap"
 )
 
@@ -99,6 +100,7 @@ func HandlePrivateMessage(client *http.Client, msg *model.Message) {
 	zaplog.Logger.Infof("HandlePrivateMessage from=%d text=%q", msg.UserID, truncateForLog(flat, 200))
 
 	if targetGroup, ok := parseAccessRequest(flat); ok {
+		metrics.IncPrivateAccessRequest()
 		handleGroupAccessRequest(client, msg, flat, targetGroup)
 		return
 	}
