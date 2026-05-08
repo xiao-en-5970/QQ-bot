@@ -14,8 +14,34 @@ import (
 	"syscall"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 )
+
+// envFileCandidates 是 bot 启动时按顺序尝试加载的 .env 路径。
+//
+// 设计动机：用户希望去 yaml、走纯 .env 风格。viper.AutomaticEnv() 会让所有
+// viper.Get(key) 直接读 os.Getenv，因此只要把 .env 内容塞进进程 env，就能
+// 让现有的 viper 配置体系无缝吃到 .env 值。
+//
+// 路径选择跟现有 yaml 的搜索路径对齐：
+//
+//	./.env             本地开发（项目根）
+//	/.env              生产宿主机
+//	/app/.env          Docker 容器
+//	/etc/qq-bot/.env   系统级
+//
+// 第一个**存在**的文件会被使用；不存在则跳过（继续走 docker --env-file / shell export 注入的 env）。
+var envFileCandidates = []string{
+	"./.env",
+	"/.env",
+	"/app/.env",
+	"/etc/qq-bot/.env",
+}
+
+// loadedEnvPath 记录启动时实际加载到的 .env 路径——reload 时同路径 Overload，
+// 也用来给 fsnotify watcher 监听文件改动。空 = 没找到任何 .env，纯 env 模式。
+var loadedEnvPath string
 
 // Cfg 是全局配置——读侧直接 conf.Cfg.X 即可，无需加锁。
 //
@@ -341,18 +367,57 @@ type Config struct {
 	Bot      Bot      `mapstructure:"bot"`
 }
 
-// Init 加载配置：YAML（test.yaml） + 环境变量，env 优先级最高。
+// Init 加载配置：.env 文件 + 环境变量 + 可选的 yaml，env 优先。
 //
 // 路径搜索：
-//   - ./test.yaml          本地开发
-//   - /app/test.yaml       Docker 容器
-//   - /etc/qq-bot/test.yaml 系统级
 //
-// 生产部署（Docker）通常不挂 yaml，全部走环境变量（HFUT 模式：宿主机 /qq-bot-server/.env -> --env-file）。
-// 本地开发（Windows）继续用 ./test.yaml 即可，env 不存在时不会覆盖。
+//	.env：./.env  /.env  /app/.env  /etc/qq-bot/.env  （第一个存在的）
+//	yaml：./test.yaml  /app/test.yaml  /etc/qq-bot/test.yaml
 //
-// 热更新：调用 WatchAndReload(ctx) 即可在 yaml 变化或收到 SIGHUP 时自动 reload。
+// 启动期 .env 加载用 godotenv.Load——**仅当**进程 env 里还没有该 key 时才注入，
+// 也就是 docker `--env-file` / shell `export` 的值优先级高于 .env 文件，
+// .env 提供合理 default。
+//
+// 生产推荐：
+//
+//   - Docker：宿主机 /qq-bot-server/.env --env-file 注入即可，不需要再放 .env 进容器
+//   - 裸机：直接放 ./.env 在工作目录
+//   - 不再依赖 yaml（用户决定去 yaml）；有遗留 yaml 也能跑，env 优先生效
+//
+// 热更新：
+//
+//   - SIGHUP（kill -HUP <pid>）→ Reload()：godotenv.Overload 重读 .env **覆盖**进程 env，
+//     再 viper Unmarshal 让 Cfg 拿到新值。这是让"改 .env 立即生效"工作的关键。
+//   - .env 文件 fsnotify 改动 → 同样路径
+//   - yaml 文件改动（viper.WatchConfig）→ 同样路径
+//
+// 哪些字段改了 reload 后会生效（hot-swappable）：
+//
+//   - GROUP_AUTO_REPLY_VERBOSITY / WHITELIST / WINDOW_SECONDS / MAX_WINDOW_SIZE
+//   - GPT_API_KEY / MODEL / RECOGNIZE_MODEL / QUOTA_* / MAX_TOOL_ROUNDS
+//   - COMMANDS_ENABLED / COMMANDS_DEFAULT
+//   - TOOLS_*
+//   - BOT_OPS_GROUP_ID
+//
+// 哪些字段必须**重启**进程才生效：
+//
+//   - SERVER_ADDRESS / WS_ADDRESS / ACCESS_TOKEN / WS_ACCESS_TOKEN  （wsclient 已建立连接）
+//   - HFUT_API_URL / HFUT_API_JWT_SECRET                            （http client 已构造）
+//   - INTERNAL_PORT                                                 （internal HTTP server 已绑定）
+//   - LOG_*                                                         （logger 已初始化）
+//
+// 简单原则：跟"已建立的连接 / 已开始的监听"相关的字段都需重启。
 func Init() (err error) {
+	// 启动期：先把 .env 加进进程 env（不覆盖已有），让 viper.AutomaticEnv 看到 .env 的值
+	loadedEnvPath = pickFirstExisting(envFileCandidates)
+	if loadedEnvPath != "" {
+		if loadErr := godotenv.Load(loadedEnvPath); loadErr == nil {
+			log.Printf("[conf] loaded .env from %s (existing env wins over .env)", loadedEnvPath)
+		} else {
+			log.Printf("[conf] WARN: load .env from %s failed: %v (继续用 docker/shell 注入的 env)", loadedEnvPath, loadErr)
+		}
+	}
+
 	viper.SetConfigName("test")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(".")
@@ -375,19 +440,48 @@ func Init() (err error) {
 	return reloadFromViper(false)
 }
 
-// Reload 从已注册到 viper 的 yaml 路径 + 当前进程 env 重新解析配置，整体替换 Cfg。
+// pickFirstExisting 返回 paths 中第一个文件存在的路径；都不存在返回 ""。
+func pickFirstExisting(paths []string) string {
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// Reload 从 .env 文件 + viper（yaml + env）重新解析配置，整体替换 Cfg。
+//
+// 关键步骤：
+//
+//  1. godotenv.Overload(loadedEnvPath)——**覆盖**模式重读 .env，让用户对 .env 文件
+//     的修改立即写入进程 env。如果不 Overload，启动后 .env 改动永远读不出来：
+//     启动那次 Load 已经把所有 key 写入 env，之后再 Load（不覆盖）会全部跳过。
+//  2. viper.ReadInConfig()——重读 yaml 文件（如果有）
+//  3. viper.Unmarshal——viper.AutomaticEnv 让 Unmarshal 优先取进程 env 里的最新值
+//  4. 整体替换 Cfg，保留 User.UserID / Group.GroupID 等运行时字段
 //
 // 调用场景：
+//
+//   - .env 文件 fsnotify 检测到改动（自动）
 //   - viper 文件 watcher 检测到 yaml 改动（自动）
 //   - 进程收到 SIGHUP（kill -HUP <pid>）
 //   - 测试 / 调试时显式手工触发
 //
 // 安全性：
+//
 //   - 用临时 newCfg 完成解析、defaults、normalize 后才写回 Cfg，失败不会污染当前 Cfg
-//   - User.UserID / Group.GroupID 是 main 启动时运行时探测的（NapCat /get_login_info、/get_group_list），
-//     reload 不应覆盖；这里显式保留旧值
-//   - cfgMu 串行化写——多个 reload 并发触发时（比如 yaml 改两次 + 一个 SIGHUP）互不冲突
+//   - User.UserID / Group.GroupID 是运行时探测的（NapCat /get_login_info / /get_group_list），
+//     reload 不应覆盖；reloadFromViper(preserveRuntime=true) 显式保留旧值
+//   - cfgMu 串行化写——多个 reload 并发触发时（比如 .env 改两次 + 一个 SIGHUP）互不冲突
 func Reload() error {
+	if loadedEnvPath != "" {
+		if err := godotenv.Overload(loadedEnvPath); err != nil {
+			log.Printf("[conf] WARN: reload .env from %s failed: %v (env 不变，仅 yaml/已有 env 生效)", loadedEnvPath, err)
+		} else {
+			log.Printf("[conf] reloaded .env from %s (overload, .env wins over existing env)", loadedEnvPath)
+		}
+	}
 	if err := viper.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError
 		if !errors.As(err, &notFound) {
@@ -436,17 +530,20 @@ func Snapshot() Config {
 	return Cfg
 }
 
-// WatchAndReload 启动两条热更新通道：
+// WatchAndReload 启动三条热更新通道：
 //
 //  1. viper.WatchConfig —— 监听已加载的 yaml 文件改动；任何 Write/Create 都触发 Reload
-//  2. SIGHUP 信号 —— 收到时触发 Reload（Linux 习惯：kill -HUP <pid>；Windows 跳过）
+//  2. .env 文件 fsnotify watcher —— 监听 Init 时找到的 .env 改动；vim 等编辑器会
+//     用"先 swap 再 rename"的写入方式，watcher 在文件被 rename 后会失效，所以这里
+//     在 Remove/Rename 事件后重新 Add 一遍。
+//  3. SIGHUP 信号 —— 收到时触发 Reload（Linux 习惯：kill -HUP <pid>；Windows 跳过）
 //
 // ctx 取消时关闭信号 channel 退出 goroutine；viper 的文件 watcher 由 viper 自管理。
 //
 // 调用方：main.go 启动后 `go conf.WatchAndReload(ctx)`；不要重复 start——
 // viper.WatchConfig 重复调用会启动多个 fsnotify watcher。
 func WatchAndReload(ctx context.Context) {
-	// yaml 文件 watcher
+	// yaml 文件 watcher（viper 内置）
 	viper.OnConfigChange(func(e fsnotify.Event) {
 		if e.Op&(fsnotify.Write|fsnotify.Create) == 0 {
 			return
@@ -459,6 +556,9 @@ func WatchAndReload(ctx context.Context) {
 	})
 	viper.WatchConfig()
 
+	// .env 文件 watcher——独立 fsnotify 实例
+	go watchEnvFile(ctx)
+
 	// SIGHUP 通道——Windows 没有 SIGHUP，跳过即可
 	if runtime.GOOS == "windows" {
 		<-ctx.Done()
@@ -468,7 +568,7 @@ func WatchAndReload(ctx context.Context) {
 	signal.Notify(sigCh, syscall.SIGHUP)
 	defer signal.Stop(sigCh)
 
-	log.Printf("[conf] 配置热更新已启用：yaml 文件变化自动 reload；kill -HUP %d 也可强制 reload", os.Getpid())
+	log.Printf("[conf] 配置热更新已启用：.env / yaml 文件改动自动 reload；kill -HUP %d 也可强制 reload", os.Getpid())
 
 	for {
 		select {
@@ -480,6 +580,66 @@ func WatchAndReload(ctx context.Context) {
 				continue
 			}
 			log.Printf("[conf] 已重载配置（触发=SIGHUP）")
+		}
+	}
+}
+
+// watchEnvFile 监听 Init 时找到的 .env 文件改动，触发 Reload。
+//
+// 处理 vim 等编辑器的"swap+rename"写入模式：
+//   - Write/Create 事件 → 直接 Reload
+//   - Remove/Rename 事件 → 老 inode 已经断开，需要 absPath 重新 Add 才能继续监听
+//     新文件；尝试失败说明文件还没被重新创建（vim 在过渡阶段），下次事件时再补
+//
+// 没有 .env 文件（loadedEnvPath==""）时本函数直接 return，不浪费 watcher。
+func watchEnvFile(ctx context.Context) {
+	if loadedEnvPath == "" {
+		return
+	}
+	absPath, err := filepath.Abs(loadedEnvPath)
+	if err != nil {
+		log.Printf("[conf] env watch: invalid path %s: %v", loadedEnvPath, err)
+		return
+	}
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("[conf] env watch: failed to create watcher: %v", err)
+		return
+	}
+	defer w.Close()
+	if err := w.Add(absPath); err != nil {
+		log.Printf("[conf] env watch: failed to watch %s: %v", absPath, err)
+		return
+	}
+	log.Printf("[conf] env watch: watching %s for changes", absPath)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-w.Events:
+			if !ok {
+				return
+			}
+			if ev.Op&(fsnotify.Write|fsnotify.Create) != 0 {
+				if err := Reload(); err != nil {
+					log.Printf("[conf] env reload 失败: %v", err)
+				} else {
+					log.Printf("[conf] 已重载配置（触发=.env 改动 %s）", ev.Name)
+				}
+			}
+			if ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+				// 重新 Add 让 watcher 跟上 vim 的新 inode
+				_ = w.Remove(absPath)
+				if err := w.Add(absPath); err != nil {
+					// 文件可能在重命名过渡中，下次事件时再补
+					log.Printf("[conf] env watch: re-add 失败 (vim swap?): %v", err)
+				}
+			}
+		case err, ok := <-w.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("[conf] env watch error: %v", err)
 		}
 	}
 }
