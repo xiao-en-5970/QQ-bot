@@ -127,11 +127,19 @@ jobs:
           BOT_PORT="\${BOT_PORT:-8090}"
           echo "[deploy] internal API 监听端口: \$BOT_PORT（仅 127.0.0.1）"
 
+          # 双重 env 注入（跟 hfut 一致，参考其 deploy.yml 注释）：
+          #   --env-file /tmp/.env.qq-bot.docker：容器启动时 docker daemon 把 KEY=VAL 注入进程 environ
+          #     （这是一次性快照，之后改宿主 /qq-bot-server/.env 不会影响已跑容器进程）
+          #   -v /qq-bot-server/.env:/.env:ro：把宿主 .env 挂进容器内 /.env
+          #     → conf.envFileCandidates 包含 /.env，bot 启动期 godotenv.Load 会读到；
+          #     → 运行期改宿主 /qq-bot-server/.env + kill -HUP <容器内 PID> 触发 godotenv.Overload
+          #       重读 /.env 覆盖 environ，热更新 hot-swappable 字段（详见 conf/conf.go 注释）
           docker run -d --name qq-bot-server \
             --restart unless-stopped \
             --env-file /tmp/.env.qq-bot.docker \
             -p "127.0.0.1:\${BOT_PORT}:\${BOT_PORT}" \
             -v /qq-bot-server/cache:/tmp/qq-bot \
+            -v /qq-bot-server/.env:/.env:ro \
             "qq-bot-server:${TAG}"
 
           sleep 3
