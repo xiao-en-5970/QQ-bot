@@ -39,6 +39,19 @@ func hasMeaningfulText(msg autoReplyMsg) bool {
 	return false
 }
 
+// hasInlineImage 判断这条消息内部是否含 image segment。
+//
+// QQ 输入框可以在一条消息里同时塞 text 和 image（"图文混发"），这种消息本身就是完整
+// 上架意图——无需等 silence。详见 splitBucketIntoUnits 的"图文同条快速路径"。
+func hasInlineImage(msg autoReplyMsg) bool {
+	for _, seg := range msg.Segments {
+		if seg.Type == "image" {
+			return true
+		}
+	}
+	return false
+}
+
 // splitBucketIntoUnits 把桶里消息序列按用户上架习惯切分成多个 unit。
 //
 // 切分目标：每个 unit = `[图]* + 1 个 text + [图]*`，至多 1 个 text。
@@ -70,6 +83,21 @@ func splitBucketIntoUnits(msgs []autoReplyMsg) ([][]autoReplyMsg, []autoReplyMsg
 
 	for _, m := range msgs {
 		if hasMeaningfulText(m) {
+			// 图文同条快速路径：消息内部已经同时含 text+image，本身就是完整上架意图，
+			// **自包含**——不吸收周围任何图（前置孤图很可能是无关闲聊，不能误归属）。
+			//
+			//   - 前置 pendingImages（孤图）→ 直接丢弃
+			//   - 之前等图的 activeUnit → 单独闭合（不吸收这条图文同条）
+			//   - 图文同条本身 → 单独成一个 completed unit
+			if hasInlineImage(m) {
+				pendingImages = nil
+				if len(activeUnit) > 0 {
+					completed = append(completed, activeUnit)
+					activeUnit = nil
+				}
+				completed = append(completed, []autoReplyMsg{m})
+				continue
+			}
 			switch {
 			case len(pendingImages) > 0:
 				// 模式 A 闭合：累积图 + 当前 text → 完成的 unit。text 本身是右边界，

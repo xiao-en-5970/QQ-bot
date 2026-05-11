@@ -155,7 +155,7 @@ func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *mod
 		if disambigChoiceFromText(flat) > 0 && disambigMgr.Get(key) != nil {
 			shouldFlush = true
 		}
-		if !shouldFlush && dupOffShelfMgr.Peek(key) != nil && matchesDupOffShelfReply(flat) {
+		if !shouldFlush && dupOffShelfMgr.Peek(key) != nil && matchesDupOffShelfReply(flat) != dupChoiceNone {
 			shouldFlush = true
 		}
 	}

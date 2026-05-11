@@ -72,6 +72,7 @@ type RecognizeAction struct {
 	Negotiable  bool     `json:"negotiable,omitempty"`  // true = 未说价或明确「面议」；与 price=0 免费送不同
 	Bargain     bool     `json:"bargain,omitempty"`     // 可刀：文案含「可刀」「刀」等（与面议独立）
 	Category    int      `json:"category,omitempty"`    // 1=二手 2=有偿求助
+	Stock       int      `json:"stock,omitempty"`       // 库存数量；用户没明说=0（dispatch 落库时按 1 兜底）
 	Location    string   `json:"location,omitempty"`    // 地点（"新区" / "下铺" / 见面地等）；没明确就空
 
 	// 上架提问
@@ -228,6 +229,16 @@ const recognizeSystemPrompt = `你是 QQ 群聊业务消息识别器。给你一
 9. **location**:
    - 用户提到的地点直接抄进去（"新区"、"39栋下铺"、"南区门口"等）
    - 没提就空字符串
+
+9b. **stock（商品数量）**:
+   - 用户明说数量的，输出 stock 整数：
+     - "出 3 个鞋架 5r/个" → stock=3
+     - "鞋架×2 共 10 元" → stock=2
+     - "出 5 张电影票" → stock=5
+     - "拼车 3 个座位" → stock=3
+   - 用户没明说数量 → **不输出 stock 字段**（dispatch 端按 1 兜底）
+   - 数量 ≤ 0 / 非整数 / 看不出来 → 不输出 stock 字段（按 1 兜底）
+   - 数量超过 999 视为夸张表达 / 看错 → 不输出 stock（按 1 兜底，**保守起见**）
 10. **off_shelf_hint / close_question_hint**:
     - 用户明确说哪个商品已出 / 已求得（"鞋架已出"、"教材已求到"）→ hint 写"鞋架"/"教材"
     - 用户没指明（短句单独成立："已出"、"已找到"、"求到了"、"已求得"、"已买到"、"是" 表示已卖出/已求到）→ hint 写空字符串；bot 后续反问消歧

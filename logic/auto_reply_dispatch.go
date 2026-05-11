@@ -178,7 +178,7 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 		desc = title
 	}
 
-	pubResp, pubErr := global.Hfut.PublishGood(ctx, hfut.PublishGoodReq{
+	seekReq := hfut.PublishGoodReq{
 		UserID:     userID,
 		GroupID:    key.GroupID,
 		Title:      title,
@@ -186,19 +186,21 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 		Category:   2,
 		Negotiable: false,
 		Price:      0,
-	})
+	}
+	pubResp, pubErr := global.Hfut.PublishGood(ctx, seekReq)
 
 	if pubErr != nil {
 		var dup *hfut.DuplicateGoodInfo
 		if errors.As(pubErr, &dup) {
 			zaplog.Logger.Infof("autoReply seek_goods 去重命中 user=%d title=%q existing=%d/%q",
 				userID, title, dup.ExistingID, dup.ExistingTitle)
-			dupOffShelfMgr.Save(key, userID, dup.ExistingID, dup.ExistingTitle)
+			origReq := seekReq // 拷贝快照供反问 followup 重发起 publish
+			dupOffShelfMgr.Save(key, userID, dup.ExistingID, dup.ExistingTitle, &origReq)
 			dupTitle := dup.ExistingTitle
 			if dupTitle == "" {
 				dupTitle = title
 			}
-			text := joinAckLines(hintLine, fmt.Sprintf("求物品「%s」已发过。要重发先回：下架旧的", dupTitle))
+			text := joinAckLines(hintLine, fmt.Sprintf("求物品「%s」已发过（id=%d）。回复 1=重复上架 / 2=下架旧的并上架", dupTitle, dup.ExistingID))
 			return ackResult{Text: text, Kind: ackKindDup}
 		}
 		zaplog.Logger.Errorf("autoReply seek_goods PublishGood 失败 user=%d title=%q: %v", userID, title, pubErr)
@@ -349,7 +351,7 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 
 	// resp 里有 GoodID 用于"最近一条"快速查找；不在群里展示给用户——
 	// 用户在 app "我的发布" 列表能看到刚发的，没必要再给个数字增加阅读负担。
-	resp, err := global.Hfut.PublishGood(ctx, hfut.PublishGoodReq{
+	pubReq := hfut.PublishGoodReq{
 		UserID:     userID,
 		GroupID:    groupID,
 		Title:      strings.TrimSpace(a.Title),
@@ -358,24 +360,29 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 		Negotiable: negotiable,
 		Bargain:    a.Bargain,
 		Price:      priceCents,
+		Stock:      a.Stock, // <=0 时 hfut 后端按 1 兜底（详见 BotPublishGood 注释）
 		Location:   strings.TrimSpace(a.Location),
 		Images:     images,
-	})
+	}
+	resp, err := global.Hfut.PublishGood(ctx, pubReq)
 	if err != nil {
 		// 去重保护命中——不视为失败，给用户友好提示，不重复上架
 		var dup *hfut.DuplicateGoodInfo
 		if errors.As(err, &dup) {
 			zaplog.Logger.Infof("autoReply 去重命中 user=%d title=%q existing=%d/%q",
 				userID, a.Title, dup.ExistingID, dup.ExistingTitle)
-			dupOffShelfMgr.Save(key, userID, dup.ExistingID, dup.ExistingTitle)
-			if dup.ExistingTitle != "" {
-				return ackResult{
-					Text: fmt.Sprintf("「%s」已在售。要重发先回：下架旧的", dup.ExistingTitle),
-					Kind: ackKindDup,
-				}
+			origReq := pubReq // 拷贝供反问 followup 用
+			dupOffShelfMgr.Save(key, userID, dup.ExistingID, dup.ExistingTitle, &origReq)
+			showTitle := dup.ExistingTitle
+			if showTitle == "" {
+				showTitle = strings.TrimSpace(a.Title)
+			}
+			if showTitle == "" {
+				showTitle = "这条"
 			}
 			return ackResult{
-				Text: "发过类似的了。要重发先回：下架旧的",
+				Text: fmt.Sprintf("「%s」已在售（id=%d）。回复 1=重复上架 / 2=下架旧的并上架",
+					showTitle, dup.ExistingID),
 				Kind: ackKindDup,
 			}
 		}
@@ -410,6 +417,10 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 		if a.Category == 2 {
 			b.WriteString("（有偿）")
 		}
+	}
+	// 数量（用户明说"出 N 个" 才显示；默认 1 不显示）
+	if a.Stock > 1 {
+		fmt.Fprintf(&b, " × %d", a.Stock)
 	}
 	if a.Location != "" {
 		b.WriteString("，")

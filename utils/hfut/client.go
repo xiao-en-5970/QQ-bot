@@ -184,6 +184,9 @@ type UpsertQQChildResp struct {
 // GroupID：bot 触发本次上架时来源 QQ 群号；后端持久化到 goods.created_in_group_id，
 // 后续孤儿商品 "请求下架" 优先用它定位 "在哪个群 @ 卖家"。
 // <=0 时不传给后端（兼容非 bot 路径，落库为 NULL）。
+//
+// Stock：库存数量；<=0 时 hfut 后端按 1 兜底。bot 识别到用户明说"出 N 个"才填，
+// 没明说时不传（即 0）。
 type PublishGoodReq struct {
 	UserID     uint     `json:"user_id"`
 	GroupID    int64    `json:"group_id,omitempty"` // bot 上架时来源 QQ 群号；<=0 不填
@@ -193,8 +196,12 @@ type PublishGoodReq struct {
 	Negotiable bool     `json:"negotiable"` // true 时 Price 被忽略，前端展示"面议"
 	Bargain    bool     `json:"bargain"`    // 可刀
 	Price      int      `json:"price"`      // 单位：分
+	Stock      int      `json:"stock,omitempty"` // 库存数量；<=0 时后端按 1 兜底
 	Location   string   `json:"location"`
 	Images     []string `json:"images"`
+	// Force=true 时后端跳过 title 重复检查。给 bot 反问"重复上架"路径用——
+	// 用户在群里选择"1 重复上架"后，bot 用 Force=true 重发原 request 强制创建。
+	Force bool `json:"force,omitempty"`
 }
 
 // PublishGoodResp 上架商品返回。

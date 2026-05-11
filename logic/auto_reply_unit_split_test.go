@@ -31,6 +31,20 @@ func imageMsg(id int64) autoReplyMsg {
 	}
 }
 
+// 构造一条"图文同条"消息——QQ 输入框可以在一条 message 里同时塞 text 和 image
+func textWithImageMsg(id int64, content string) autoReplyMsg {
+	td, _ := json.Marshal(model.TextData{Text: content})
+	var raw json.RawMessage = td
+	return autoReplyMsg{
+		MessageID: id,
+		Segments: []model.MessageSegment{
+			{Type: "text", Data: raw},
+			{Type: "image", Data: json.RawMessage("{}")},
+		},
+		FlatText: content + " [图片]",
+	}
+}
+
 // summarizeUnits 把 unit 序列描述成 "[图]*文" / "文[图]*" / 纯图 形式，方便测试断言
 func summarize(units [][]autoReplyMsg) []string {
 	out := make([]string, 0, len(units))
@@ -126,6 +140,32 @@ func TestSplitBucketIntoUnits(t *testing.T) {
 			input:         []autoReplyMsg{imageMsg(1), imageMsg(2), textMsg(3, "出鞋架"), imageMsg(4), imageMsg(5), textMsg(6, "出杯子"), imageMsg(7)},
 			wantCompleted: []string{"IIT", "IIT"},
 			wantTail:      "I",
+		},
+		// 图文同条快速路径——单条消息内部已经有 text+image，立即闭合
+		{
+			name:          "inline_image_single_message",
+			input:         []autoReplyMsg{textWithImageMsg(1, "出鞋架6元")},
+			wantCompleted: []string{"T"},
+			wantTail:      "",
+		},
+		// 图文同条**自包含**——前面孤图被丢弃（很可能是无关闲聊的图）
+		{
+			name:          "inline_image_after_pending_images_drops_orphans",
+			input:         []autoReplyMsg{imageMsg(1), imageMsg(2), textWithImageMsg(3, "出鞋架6元")},
+			wantCompleted: []string{"T"},
+			wantTail:      "",
+		},
+		{
+			name:          "inline_image_then_more_images",
+			input:         []autoReplyMsg{textWithImageMsg(1, "出鞋架6元"), imageMsg(2), imageMsg(3)},
+			wantCompleted: []string{"T"},
+			wantTail:      "II",
+		},
+		{
+			name:          "active_unit_followed_by_inline",
+			input:         []autoReplyMsg{textMsg(1, "出鞋架"), textWithImageMsg(2, "出杯子3元")},
+			wantCompleted: []string{"T", "T"},
+			wantTail:      "",
 		},
 	}
 
