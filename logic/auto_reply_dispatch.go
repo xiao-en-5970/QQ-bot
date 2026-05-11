@@ -100,7 +100,12 @@ func dispatchActionToHfut(
 	}
 
 	// 第 2 步：upsert 旗下账号——所有写操作都需要 user_id。
-	upsert, err := global.Hfut.UpsertQQChild(ctx, qqNumberOf(key.UserID), key.GroupID, userCard)
+	//
+	// 同时把 QQ 群名片（userCard）和拼出来的头像 CDN URL 上报给 hfut——
+	// hfut 用"最新覆盖"策略写到 users.nickname / users.qq_avatar_url，
+	// 个人展示页与作者卡片优先用这两个字段（详见 hfut model.User.DisplayName / DisplayAvatarPath）。
+	upsert, err := global.Hfut.UpsertQQChild(ctx, qqNumberOf(key.UserID), key.GroupID,
+		userCard, qqAvatarURL(key.UserID))
 	if err != nil {
 		// 群没配学校 → 完全静默（按 SKILL.md 设计）
 		if errors.Is(err, hfut.ErrGroupNoSchool) {
@@ -151,6 +156,22 @@ func isMutatingAction(actionType string) bool {
 // 跟 hfut 那边 user.qq_number 字段对齐（varchar）。
 func qqNumberOf(userID int64) string {
 	return fmt.Sprintf("%d", userID)
+}
+
+// qqAvatarURL 拼出指定 QQ 号的头像 CDN URL。
+//
+// 用 q.qlogo.cn/headimg_dl 接口——它是 QQ 官方提供的公开头像服务，URL 永久有效，
+// 头像更新后下次拉取自动是新图（无需任何 token / API key）。spec 控制尺寸，
+// 640 px 足够前端 retina 显示头像 + 用户列表头像（同一份）。
+//
+// 接口文档：https://q.qlogo.cn/headimg_dl?dst_uin={qq}&spec=640
+//
+// userID == 0 / 负数 → 返空串。
+func qqAvatarURL(userID int64) string {
+	if userID <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://q.qlogo.cn/headimg_dl?dst_uin=%d&spec=640", userID)
 }
 
 // dispatchSeekGoods 处理「收/求/求购/收购 + 物品」（无价场景）：

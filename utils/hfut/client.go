@@ -250,11 +250,15 @@ type OpenQuestion struct {
 // UpsertQQChild idempotent 创建/复用 QQ 旗下账号。
 //
 // hfut 端没配 group → 学校映射时返回 ErrGroupNoSchool。
-func (c *Client) UpsertQQChild(ctx context.Context, qqNumber string, groupID int64, nickname string) (*UpsertQQChildResp, error) {
+//
+// nickname / avatarURL 都是"展示信息"——bot 从 QQ 群消息 sender / get_group_member_info 拿到
+// 后透传过来，hfut 端按"最新覆盖"写到 users.nickname / users.qq_avatar_url。空字符串 = 不动。
+func (c *Client) UpsertQQChild(ctx context.Context, qqNumber string, groupID int64, nickname, avatarURL string) (*UpsertQQChildResp, error) {
 	body := map[string]interface{}{
-		"qq_number": qqNumber,
-		"group_id":  groupID,
-		"nickname":  nickname,
+		"qq_number":  qqNumber,
+		"group_id":   groupID,
+		"nickname":   nickname,
+		"avatar_url": avatarURL,
 	}
 	var out UpsertQQChildResp
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/bot/users/qq-child", body, &out)
