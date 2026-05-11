@@ -111,6 +111,28 @@ func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *mod
 	})
 	b.LastSeenAt = now
 
+	// 60s 滑动窗口：丢弃桶里超过 windowSeconds 之前的旧消息。
+	//
+	// 跟 silence 是不同概念——silence 看"最近一条消息以来的静默时间"决定 flush 时机；
+	// 滑动窗口看"每条消息自身的年龄"决定它是否还在视野里。目的是防止"用户半小时前发
+	// 的图 + 现在发的文字"被识别成同一上架，引入跨上下文误判。
+	windowSec := conf.Cfg.Group.AutoReplyWindowSeconds
+	if windowSec <= 0 {
+		windowSec = 60
+	}
+	cutoff := now.Add(-time.Duration(windowSec) * time.Second)
+	keepFrom := 0
+	for i, am := range b.Msgs {
+		if !am.Time.Before(cutoff) {
+			keepFrom = i
+			break
+		}
+		keepFrom = i + 1
+	}
+	if keepFrom > 0 {
+		b.Msgs = b.Msgs[keepFrom:]
+	}
+
 	// 桶超大时主动 flush——异常情况下用户狂发 30 条不停顿，不能一直攒。
 	// 注意：Flush 内部需要拿不到 mu，这里释放后再调（用 goroutine 异步）。
 	maxSize := conf.Cfg.Group.AutoReplyMaxWindowSize
@@ -145,9 +167,25 @@ func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *mod
 		go m.processSnapshot(key, snapshot)
 		return
 	}
-	// 不再做正则预过滤——所有消息都进窗口，等 silence 触发后由 Kimi 统一判定。
-	// 这避免了"上架一个 X" 这种短句被关键词白名单漏掉。代价是 Kimi 调用量略增；
-	// 当 quota 冷却时上层会静默丢弃当前窗口（详见 skill/bot/recognition.md）。
+
+	// Unit 切分：按用户上架习惯把桶里序列切成多个 unit（每个 unit 含 ≤ 1 个 text）。
+	//
+	//   - 模式 A `图 图 图 文`：text 立即闭合 unit → completed_units 里有内容 → 立即 flush
+	//   - 模式 B `文 图 图 图`：text 起头等图，只有再来一个 text 才闭合
+	//   - 末尾的 unit（含 text 但还没遇到右边界的 text）留在桶里，等 silence/下一个 text
+	//   - 纯图 tail 留在桶里，等 silence 后由 scanOnce 静默清空（不调 Kimi）
+	//
+	// 详见 auto_reply_unit_split.go 注释。
+	completed, tail := splitBucketIntoUnits(b.Msgs)
+	if len(completed) > 0 {
+		b.Msgs = tail
+		for _, unit := range completed {
+			unit := unit
+			go m.processSnapshot(key, unit)
+		}
+		return
+	}
+	// 没有可立即 flush 的 unit——保留 tail（== 当前桶），等 scanOnce 按 silence 判定
 }
 
 // scanOnce 扫描一遍所有桶，把已经"沉默够久"的桶 flush 出去。
@@ -174,6 +212,20 @@ func (m *autoReplyManager) scanOnce() {
 			continue
 		}
 		if now.Sub(b.LastSeenAt) < threshold {
+			continue
+		}
+		// Silence 触发：检查 tail 是否含业务文字（text 消息）。
+		//
+		//   - 含 text：模式 B 半成品（`文 图*`）正常 flush 走 Kimi 识别
+		//   - 不含 text：纯图序列——按用户明示"纯图片不处理"，**静默清空**不调 Kimi
+		//
+		// 这是新切分逻辑的兜底：Push 时已经把"完整 unit"切走立即 flush 了，剩在桶里
+		// 的 tail 要么是含 text 的模式 B 半成品，要么是孤立的纯图（用户发图后没补任何
+		// 文字 → 不识别）。
+		if !bucketHasMeaningfulText(b.Msgs) {
+			zaplog.Logger.Debugf("autoReply silence 静默清空纯图桶 group=%d user=%d msgs=%d",
+				k.GroupID, k.UserID, len(b.Msgs))
+			b.Msgs = nil
 			continue
 		}
 		ready_ = append(ready_, ready{key: k, snapshot: b.Msgs})
