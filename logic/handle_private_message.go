@@ -143,11 +143,9 @@ func handleGroupAccessRequest(client *http.Client, msg *model.Message, rawText s
 	role := resolveRoleInGroup(client, targetGroup, caller)
 	zaplog.Logger.Infof("群接入申请 caller=%d target=%d role=%s", caller, targetGroup, role)
 
-	// 上报运维群——发起人昵称从私聊事件 sender 拿
-	requesterName := strings.TrimSpace(msg.Sender.Card)
-	if requesterName == "" {
-		requesterName = strings.TrimSpace(msg.Sender.Nickname)
-	}
+	// 上报运维群——只用 sender.nickname（QQ 全局昵称），不取群名片。
+	// 私聊场景下群名片本来也几乎不会被填，这里同时跟群消息流的展示策略对齐。
+	requesterName := strings.TrimSpace(msg.Sender.Nickname)
 	NotifyOpsGroupAccessRequest(client, caller, requesterName, targetGroup, role, rawText)
 
 	// 私聊回执

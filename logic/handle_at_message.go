@@ -147,12 +147,16 @@ func handleAtCommand(client *http.Client, msg *model.Message, botID int64) {
 // 入桶是 O(1) 操作（map + slice append + mutex），不会阻塞 wsclient 协程。
 func handleAutoReply(client *http.Client, msg *model.Message) {
 	_ = client // 当前不在入桶阶段调用 client；扫描协程会自带一份 client 用来发回执
-	// 群名片优先用 sender.card（用户在这个群里设置的），否则退到 sender.nickname
-	userCard := msg.Sender.Card
-	if userCard == "" {
-		userCard = msg.Sender.Nickname
-	}
-	autoReplyMgr.Push(msg.GroupID, msg.UserID, userCard, msg)
+	// 展示名**只**使用 sender.nickname（QQ 全局昵称），**绝对不**回退到 sender.card（群名片）。
+	//
+	// 为什么不允许群名片：app 端 author 卡片 / 个人展示页要展示用户的"QQ 身份"，
+	// 同一 QQ 在不同群可能被设不同备注，跨群展示会出现"明明是同一个人，名字却不一样"
+	// 的违和感。群名片只是这个群的本地化备注，不是这个人的真实身份。
+	//
+	// sender.nickname 罕见为空的情况：bot 不上报展示名，hfut 端收到空串不会覆盖现有
+	// nickname；同时 scheduler 每 6h 通过 get_stranger_info 主动拉 QQ 全局昵称兜底。
+	displayName := strings.TrimSpace(msg.Sender.Nickname)
+	autoReplyMgr.Push(msg.GroupID, msg.UserID, displayName, msg)
 }
 
 // extractFirstTextAfterAt 提取 @bot 之后的纯文本——给运维群 @ 提问用。

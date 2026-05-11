@@ -48,7 +48,7 @@ import (
 type autoReplyMsg struct {
 	MessageID  int64
 	UserID     int64
-	UserCard   string // 群名片 / 昵称（取自 sender.card / sender.nickname）
+	UserCard   string // 用户展示名——**只**取 sender.nickname（QQ 全局昵称），不允许群名片污染
 	Time       time.Time
 	Segments   []model.MessageSegment // 原 segments（含 image url、at、text 等）
 	FlatText   string                 // 扁平化的文本表示（含 [图片] 等占位符），方便 log / 喂 LLM
