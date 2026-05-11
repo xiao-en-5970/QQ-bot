@@ -107,6 +107,33 @@ func IsQuotaError(err error) bool {
 		strings.Contains(s, "rate_limit_reached_error")
 }
 
+// IsRetryableError 判断 err 是否是"重试一次大概率能成功"的临时错误。
+//
+// 跟 IsQuotaError 互斥：quota 是结构性资源耗尽，重试也没用，应进 quotaGate 熔断；
+// retryable 是 Moonshot 引擎本身的临时容量 / 网络瞬抖，间隔几百毫秒重试通常成功。
+//
+// 已知 retryable 信号：
+//
+//   - engine_overloaded_error  Moonshot 引擎过载（服务端容量瞬时打满）
+//   - context deadline exceeded / i/o timeout  网络层瞬抖
+//   - 5xx server error / Internal Server Error  Moonshot 内部错
+//
+// 单次重试足够覆盖 95% 临时故障，控制 API 调用预算的同时拿到自愈能力。
+func IsRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsQuotaError(err) {
+		// quota 错由 quotaGate 熔断处理，不在重试路径里
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "engine_overloaded_error") ||
+		strings.Contains(s, "Internal Server Error") ||
+		strings.Contains(s, "i/o timeout") ||
+		strings.Contains(s, "context deadline exceeded")
+}
+
 // gateStatusForLog 给 log / 单测用——一行返回当前 gate 内部状态，方便排查。
 func (q *quotaGate) gateStatusForLog() string {
 	q.mu.Lock()

@@ -14,8 +14,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"qq_bot/conf"
+	zaplog "qq_bot/utils/zap"
 
 	"github.com/northes/go-moonshot"
 )
@@ -371,7 +373,7 @@ func (k *Kimi) RecognizeBusinessActions(ctx context.Context, input RecognizeInpu
 	}
 
 	model := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.RecognizeModel)
-	resp, err := k.cli.Chat().Completions(ctx, &moonshot.ChatCompletionsRequest{
+	req := &moonshot.ChatCompletionsRequest{
 		Model: model,
 		Messages: []*moonshot.ChatCompletionsMessage{
 			{Role: moonshot.RoleSystem, Content: recognizeSystemPrompt},
@@ -382,7 +384,15 @@ func (k *Kimi) RecognizeBusinessActions(ctx context.Context, input RecognizeInpu
 			Type: moonshot.ChatCompletionsResponseFormatJSONObject,
 		},
 		// 不传 Tools——识别不需要 tool calling
-	})
+	}
+	resp, err := k.cli.Chat().Completions(ctx, req)
+	// 一次性短退避重试：engine_overloaded / 5xx / 网络瞬抖大多 800ms 后好。
+	// 重试只针对 retryable 错误（IsQuotaError 仍立刻返回，让 quotaGate 走熔断）。
+	if err != nil && IsRetryableError(err) {
+		zaplog.Logger.Infof("RecognizeBusinessActions 临时错重试一次: %v", err)
+		time.Sleep(800 * time.Millisecond)
+		resp, err = k.cli.Chat().Completions(ctx, req)
+	}
 	globalQuotaGate.RecordResult(err)
 	if err != nil {
 		return nil, fmt.Errorf("调用 moonshot completions 失败: %w", err)
