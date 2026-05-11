@@ -111,6 +111,11 @@ func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *mod
 	})
 	b.LastSeenAt = now
 
+	// 顺带把这位 QQ 用户的 nickname / 头像同步到 hfut——
+	// 30 分钟节流 + fire-and-forget，让旗下号 nickname 跟着群消息逐步回填
+	// （即便用户没触发业务动作）。详见 display_sync.go。
+	maybeSyncQQDisplay(groupID, userID, userCard)
+
 	// 60s 滑动窗口：丢弃桶里超过 windowSeconds 之前的旧消息。
 	//
 	// 跟 silence 是不同概念——silence 看"最近一条消息以来的静默时间"决定 flush 时机；

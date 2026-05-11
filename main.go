@@ -119,7 +119,7 @@ func main() {
 	// Wg.Add(1) 必须由父协程在 `go ...` 之前调用，否则父协程可能"抢跑"到 Wg.Wait()
 	// 时各 goroutine 还没来得及自己 Add，counter 仍是 0，Wait 立刻返回，
 	// main 直接退出，bot 一启动就死。这是之前 time.Sleep 兜底掩盖的同一个 bug。
-	const backgroundJobs = 6 // WaitExit, ParseCmd, ClearCacheTicker, wsclient.Run, AutoReplyScanner, InternalAPI
+	const backgroundJobs = 7 // WaitExit, ParseCmd, ClearCacheTicker, wsclient.Run, AutoReplyScanner, InternalAPI, QQDisplaySync
 	for i := 0; i < backgroundJobs; i++ {
 		global.Wg.Add(1)
 	}
@@ -135,6 +135,9 @@ func main() {
 	// hfut 反向调用接口（QQ 绑定 / 转发等）。
 	// Internal.Token 为空时 Start() 立即 return，goroutine 也按 Wg.Done 正常释放。
 	go internalapi.Start(ctx)
+	// 旗下号展示信息（昵称 / 头像）后台定时同步——启动后 30s 跑一次，之后每 6h 跑一次；
+	// 同时 30s 间隔 poll hfut 接收"管理后台立即同步"信号。详见 logic/qq_display_sync.go。
+	logic.StartQQDisplaySync(ctx)
 
 	// pprof 是 daemon 性质的调试入口，不参与 Wg（挂了也不该影响 bot 退出语义）。
 	go func() {

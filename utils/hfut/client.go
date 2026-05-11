@@ -247,6 +247,62 @@ type OpenQuestion struct {
 // 业务方法（跟 hfut /api/v1/bot/* 路由 1:1 对应）
 // =============================================================================
 
+// QQChildEntry 旗下号同步任务遍历列表里单条用户的字段集。
+type QQChildEntry struct {
+	UserID           uint   `json:"user_id"`
+	QQNumber         string `json:"qq_number"`
+	Nickname         string `json:"nickname,omitempty"`
+	QQAvatarURL      string `json:"qq_avatar_url,omitempty"`
+	CreatedInGroupID int64  `json:"created_in_group_id,omitempty"`
+}
+
+// ListQQChildrenResp 分页响应。NextCursor == 0 表示已经到末尾。
+type ListQQChildrenResp struct {
+	List       []QQChildEntry `json:"list"`
+	NextCursor uint           `json:"next_cursor"`
+	Limit      int            `json:"limit"`
+}
+
+// ListQQChildren 按 user_id ASC 分页拉所有旗下号——给 nickname 同步 scheduler 用。
+//
+// 用法：
+//
+//	cursor := uint(0)
+//	for {
+//	    resp, err := cli.ListQQChildren(ctx, cursor, 200)
+//	    ...
+//	    if resp.NextCursor == 0 { break }
+//	    cursor = resp.NextCursor
+//	}
+func (c *Client) ListQQChildren(ctx context.Context, cursor uint, limit int) (*ListQQChildrenResp, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	path := "/api/v1/bot/users/qq-children?cursor=" + strconv.FormatUint(uint64(cursor), 10) +
+		"&limit=" + strconv.Itoa(limit)
+	var out ListQQChildrenResp
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// QQSyncForceAtResp /api/v1/bot/qq-sync/pending 的返回。
+type QQSyncForceAtResp struct {
+	ForceAt int64 `json:"force_at"` // admin "立即同步"按钮按下时的 unix-ms 时间戳；0 = 未按过
+}
+
+// GetQQSyncForceAt 拉 admin 触发的"立即同步"信号位时间戳。
+//
+// bot scheduler 自己存 last_seen；poll 出 force_at 比 last_seen 新 → 立即跑一轮。
+func (c *Client) GetQQSyncForceAt(ctx context.Context) (int64, error) {
+	var out QQSyncForceAtResp
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/bot/qq-sync/pending", nil, &out); err != nil {
+		return 0, err
+	}
+	return out.ForceAt, nil
+}
+
 // UpsertQQChild idempotent 创建/复用 QQ 旗下账号。
 //
 // hfut 端没配 group → 学校映射时返回 ErrGroupNoSchool。
