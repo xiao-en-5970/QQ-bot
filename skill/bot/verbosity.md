@@ -35,3 +35,39 @@ group:
 或 env：`GROUP_AUTO_REPLY_VERBOSITY=normal`，重启 bot 即生效。
 
 注意：抑制掉的回执仍然在 zap log 里以 `INFO autoReply ack 抑制 ...` 记录，便于审计——不是真的丢了。
+
+---
+
+## SilentMode（灰度静默模式）
+
+`GROUP_AUTO_REPLY_VERBOSITY` 控制的是「回执文案要不要发」；`BOT_SILENT_MODE` 更狠
+——开了之后 bot **不在非运维群讲任何一句话**，也不发任何私聊。用于"上线前真实校园
+群灰度演练"：观察识别准确率，但群友完全感受不到 bot 存在。
+
+| 出口 | SilentMode=false | SilentMode=true |
+|---|---|---|
+| 群消息 → 运维群（`OpsGroupIDs`） | 发 | **照常发**（运维提醒 / `NotifyOpsPublish` / 运维 @bot 查询回复） |
+| 群消息 → 其它群（识别 ack / @bot 命令 / dup ack / hfut 反向 send-group） | 发 | **静默** |
+| 私聊（QQ 绑定验证码 / 群接入回执 / 订单加急私聊） | 发 | **静默** |
+| 群文件上传（jm pdf / pix） | 发 | **静默** |
+| hfut 数据库写入（识别成功后落 goods/articles 等） | 写 | **照常写** |
+| Kimi 识别调用 / Redis 防抖 / metric_minute 计数 | 跑 | **照常跑** |
+
+开法：
+
+```bash
+export BOT_SILENT_MODE=true
+```
+
+或 `conf` yaml：
+
+```yaml
+bot:
+  silent_mode: true
+```
+
+被静默掉的每次发送都会 `IncSilentSuppressed` 计数器 +1，metric_minute 表里
+`metric='silent_suppressed'` 有按分钟聚合的数据，运维面板上能看到"今天屏蔽了
+多少条"。zap log 也有 `[silent] 屏蔽群消息 group=... text=...` 的 debug 记录。
+
+切回正式上线时把 env 改回 `false`（或删掉），重启 bot 即生效。

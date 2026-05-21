@@ -83,6 +83,9 @@ type counters struct {
 	// 运维通知
 	opsNotifications atomic.Int64
 
+	// 灰度静默：被屏蔽的群消息 / 私聊 / 群文件上传次数
+	silentSuppressed atomic.Int64
+
 	// 最近事件 ring buffer（dispatch 全量明细）
 	eventsMu sync.Mutex
 	events   []DispatchEvent
@@ -113,6 +116,7 @@ type minuteBucket struct {
 	RateLimit        int64 `json:"rate_limit"`
 	PrivateAccess    int64 `json:"private_access"`
 	OpsNotify        int64 `json:"ops_notify"`
+	SilentSuppressed int64 `json:"silent_suppressed"` // 灰度静默屏蔽的对外发送
 }
 
 var c = &counters{
@@ -262,6 +266,14 @@ func IncOpsNotify() {
 	touchSeries(func(b *minuteBucket) { b.OpsNotify++ })
 }
 
+// IncSilentSuppressed 因 SilentMode 被屏蔽的一次对外发送（群消息 / 私聊 / 群文件上传）。
+//
+// 只记总数——细分 kind 暂不需要，运维面板上能看到"今天屏蔽了多少条"就够。
+func IncSilentSuppressed() {
+	c.silentSuppressed.Add(1)
+	touchSeries(func(b *minuteBucket) { b.SilentSuppressed++ })
+}
+
 // Snapshot 当前计数快照——/internal/metrics 端点输出用。
 func Snapshot() map[string]any {
 	c.mu.Lock()
@@ -293,6 +305,7 @@ func Snapshot() map[string]any {
 		RateLimit        int64 `json:"rate_limit"`
 		PrivateAccess    int64 `json:"private_access"`
 		OpsNotify        int64 `json:"ops_notify"`
+		SilentSuppressed int64 `json:"silent_suppressed"`
 	}
 	c.seriesMu.Lock()
 	keys := make([]int64, 0, len(c.series))
@@ -318,6 +331,7 @@ func Snapshot() map[string]any {
 			RateLimit:        b.RateLimit,
 			PrivateAccess:    b.PrivateAccess,
 			OpsNotify:        b.OpsNotify,
+			SilentSuppressed: b.SilentSuppressed,
 		})
 	}
 	c.seriesMu.Unlock()
@@ -341,6 +355,7 @@ func Snapshot() map[string]any {
 		"private_access_requests": c.privateAccessReq.Load(),
 		"rate_limit_hits":         c.rateLimitHits.Load(),
 		"ops_notifications":       c.opsNotifications.Load(),
+		"silent_suppressed":       c.silentSuppressed.Load(),
 		"recent_events":           events,
 		"series":                  points,
 	}

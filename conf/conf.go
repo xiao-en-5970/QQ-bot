@@ -162,13 +162,29 @@ type Group struct {
 }
 
 // IsAutoReplyGroup 判断某群是否启用了"非 @bot 也回复"白名单模式。
+//
+// 优先用 hfut 同步过来的 RuntimeOverlay.AutoReplyWhitelist；未同步过 / 拉取失败 →
+// 兜底用 env/yaml 加载的 g.AutoReplyWhitelist。
 func (g Group) IsAutoReplyGroup(groupID int64) bool {
-	for _, id := range g.AutoReplyWhitelist {
+	for _, id := range g.effectiveAutoReplyWhitelist() {
 		if id == groupID {
 			return true
 		}
 	}
 	return false
+}
+
+// effectiveAutoReplyWhitelist 取当前生效的 AutoReplyWhitelist（runtime 优先，env 兜底）。
+func (g Group) effectiveAutoReplyWhitelist() []int64 {
+	if ov := GetRuntimeOverlay(); ov != nil && ov.AutoReplyWhitelist != nil {
+		return ov.AutoReplyWhitelist
+	}
+	return g.AutoReplyWhitelist
+}
+
+// EffectiveAutoReplyWhitelist 公开版——给运维 / 日志展示用。
+func (g Group) EffectiveAutoReplyWhitelist() []int64 {
+	return g.effectiveAutoReplyWhitelist()
 }
 
 // IsAutoReplyVerbose 当前 verbosity 是否 verbose（默认/未配置 = verbose）。
@@ -358,19 +374,53 @@ type Bot struct {
 	// OpsGroupID 旧字段——保留作为向后兼容入口；reload 时会被合并进 OpsGroupIDs。
 	// 新部署请直接使用 OPS_GROUP_IDS。
 	OpsGroupID int64 `mapstructure:"ops_group_id,omitempty"`
+
+	// SilentMode 灰度静默模式。上线前实战演练时打开：
+	//   - 任何对**非 OpsGroupIDs** 的群消息（识别回执 / @bot 命令 / dup ack / 反向 internal API
+	//     发出的群消息）都被静默掉，bot 不在群里发任何字
+	//   - 任何私聊（群接入申请回执、hfut 反向触发的 QQ 绑定验证码 / 解绑通知 / 订单加急
+	//     私聊等）都被静默掉
+	//   - 任何群文件上传（jm pdf / pix）也静默
+	//   - **运维群仍正常**：`NotifyOps*` 系列发往 OpsGroupIDs 的运维提醒原样下发，
+	//     ops_query @bot 的运维查询也照常工作
+	//
+	// 业务侧（hfut 数据库写入 / Kimi 识别 / bot_dispatch_event 记录等）**不受影响**——
+	// 静默只是关掉所有"对外可见的 QQ 消息出口"，目的是在真实校园群里跑识别准确率
+	// 实测，而群友感受不到 bot 存在。
+	//
+	// env: BOT_SILENT_MODE=true|false（默认 false）
+	SilentMode bool `mapstructure:"silent_mode,omitempty"`
 }
 
-// IsOpsGroup 群号是否运维群（命中任意一个 OpsGroupIDs）。
+// IsOpsGroup 群号是否运维群。
+//
+// 优先用 hfut 同步过来的 RuntimeOverlay.OpsGroupIDs；未同步过 / 拉取失败 → 兜底
+// 用 env/yaml 加载的静态字段 b.OpsGroupIDs。
 func (b Bot) IsOpsGroup(groupID int64) bool {
 	if groupID == 0 {
 		return false
 	}
-	for _, id := range b.OpsGroupIDs {
+	for _, id := range b.effectiveOpsGroupIDs() {
 		if id == groupID {
 			return true
 		}
 	}
 	return false
+}
+
+// effectiveOpsGroupIDs 取当前生效的 OpsGroupIDs（runtime 优先，env 兜底）。
+func (b Bot) effectiveOpsGroupIDs() []int64 {
+	if ov := GetRuntimeOverlay(); ov != nil && ov.OpsGroupIDs != nil {
+		return ov.OpsGroupIDs
+	}
+	return b.OpsGroupIDs
+}
+
+// EffectiveOpsGroupIDs 公开版——给 ops_notify 等需要遍历下发的调用方。
+//
+// 不直接读 b.OpsGroupIDs 是为了在 runtime 配置启用后，所有 ops 通知都按新列表广播。
+func (b Bot) EffectiveOpsGroupIDs() []int64 {
+	return b.effectiveOpsGroupIDs()
 }
 
 // PrimaryOpsGroup 默认通知群——返回 OpsGroupIDs 第一个，列表为空时返回 0。
@@ -381,6 +431,32 @@ func (b Bot) PrimaryOpsGroup() int64 {
 		return 0
 	}
 	return b.OpsGroupIDs[0]
+}
+
+// effectiveSilentMode 取当前生效的 SilentMode（runtime 优先，env 兜底）。
+func (b Bot) effectiveSilentMode() bool {
+	if ov := GetRuntimeOverlay(); ov != nil && ov.SilentMode != nil {
+		return *ov.SilentMode
+	}
+	return b.SilentMode
+}
+
+// IsSilentForGroup 该群是否应被静默——SilentMode 开 + 非 OpsGroup → true。
+//
+// 详见 SilentMode 字段注释。
+func (b Bot) IsSilentForGroup(groupID int64) bool {
+	if !b.effectiveSilentMode() {
+		return false
+	}
+	return !b.IsOpsGroup(groupID)
+}
+
+// IsSilentForPrivate 私聊是否应被静默——SilentMode 开就一律 true。
+//
+// 灰度演练阶段不发任何私聊给用户（含 QQ 绑定验证码、群接入申请回执、订单加急等），
+// 即便消息触发方是 hfut。详见 SilentMode 字段注释。
+func (b Bot) IsSilentForPrivate() bool {
+	return b.effectiveSilentMode()
 }
 
 type Config struct {

@@ -17,7 +17,13 @@ import (
 //   - base64:// 数据
 //
 // summary 是图片外显文本，可空。
+//
+// 灰度静默 (SilentMode) 开启 + 目标群非运维群时直接返回 nil，不发 NapCat。
+// 详见 logic/silent_gate.go。
 func SendGroupImage(client *http.Client, groupID int64, file string, summary string) error {
+	if silentSuppressGroup(groupID, "[image]"+summary) {
+		return nil
+	}
 	resolved, err := resolveImageRef(file)
 	if err != nil {
 		return err

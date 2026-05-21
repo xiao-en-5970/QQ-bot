@@ -16,7 +16,13 @@ import (
 //   - file:// URI
 //   - http(s):// URL
 // 这里走绝对路径，是 NapCat 文档的默认建议形式。
+//
+// 灰度静默 (SilentMode) 开启 + 目标群非运维群时直接返回 nil，不发 NapCat。
+// 详见 logic/silent_gate.go。
 func UploadGroupFile(client *http.Client, groupID int64, file string, name string) error {
+	if silentSuppressGroupFile(groupID, name) {
+		return nil
+	}
 	zaplog.Logger.Infof("正在上传文件 %s 到 group=%d", name, groupID)
 
 	global.TmpMtx.RLock()

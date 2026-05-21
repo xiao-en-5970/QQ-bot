@@ -119,7 +119,7 @@ func main() {
 	// Wg.Add(1) 必须由父协程在 `go ...` 之前调用，否则父协程可能"抢跑"到 Wg.Wait()
 	// 时各 goroutine 还没来得及自己 Add，counter 仍是 0，Wait 立刻返回，
 	// main 直接退出，bot 一启动就死。这是之前 time.Sleep 兜底掩盖的同一个 bug。
-	const backgroundJobs = 7 // WaitExit, ParseCmd, ClearCacheTicker, wsclient.Run, AutoReplyScanner, InternalAPI, QQDisplaySync
+	const backgroundJobs = 8 // WaitExit, ParseCmd, ClearCacheTicker, wsclient.Run, AutoReplyScanner, InternalAPI, QQDisplaySync, RuntimeConfigSync
 	for i := 0; i < backgroundJobs; i++ {
 		global.Wg.Add(1)
 	}
@@ -138,6 +138,12 @@ func main() {
 	// 旗下号展示信息（昵称 / 头像）后台定时同步——启动后 30s 跑一次，之后每 6h 跑一次；
 	// 同时 30s 间隔 poll hfut 接收"管理后台立即同步"信号。详见 logic/qq_display_sync.go。
 	logic.StartQQDisplaySync(ctx)
+	// Bot 运行时配置同步：从 hfut /api/v1/bot/runtime-config 拉群白名单 / 运维群 / silent_mode，
+	// 启动同步拉一次 + 之后每 60s poll；env / yaml 配的同名字段作为兜底。
+	// 详见 logic/runtime_config_sync.go。HFUT_API_URL 未配时 StartRuntimeConfigSync 立即跳过，
+	// 但 Wg.Done 仍要由它内部完成——这里加 wg 计数已经预留 1 个，让 Start 在不启 goroutine 时
+	// 也消费掉它。
+	logic.StartRuntimeConfigSync(ctx)
 
 	// pprof 是 daemon 性质的调试入口，不参与 Wg（挂了也不该影响 bot 退出语义）。
 	go func() {

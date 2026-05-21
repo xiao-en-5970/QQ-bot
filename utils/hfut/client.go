@@ -303,6 +303,25 @@ func (c *Client) GetQQSyncForceAt(ctx context.Context) (int64, error) {
 	return out.ForceAt, nil
 }
 
+// GetRuntimeConfig 拉 hfut 后端维护的"bot 运行时配置"——KV 形态返回。
+//
+// 已知 key（详见 hfut dao/bot_runtime_config.go）：
+//   - auto_reply_whitelist  jsonb int64 数组
+//   - ops_group_ids         jsonb int64 数组
+//   - silent_mode           jsonb bool
+//
+// 未配置的 key 不会出现在返回 map 里。调用方负责按 key 解码 + 兜底 env 默认值。
+//
+// 失败时返回 (nil, err)；调用方应保留上次的内存配置（典型实现见 logic/runtime_config_sync.go）。
+func (c *Client) GetRuntimeConfig(ctx context.Context) (map[string]json.RawMessage, error) {
+	// hfut 的 doJSON 已经剥掉 envelope，把 data 字段直接 Unmarshal 到 out
+	out := make(map[string]json.RawMessage)
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/bot/runtime-config", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // UpsertQQChild idempotent 创建/复用 QQ 旗下账号。
 //
 // hfut 端没配 group → 学校映射时返回 ErrGroupNoSchool。

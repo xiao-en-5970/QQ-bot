@@ -31,7 +31,7 @@ import (
 // 多群发送任意一个失败仅 log warn，其它继续发；所有 dispatch 路径都不应该因为
 // NotifyOps 失败而失败。
 func NotifyOps(client *http.Client, text string) {
-	gids := conf.Cfg.Bot.OpsGroupIDs
+	gids := conf.Cfg.Bot.EffectiveOpsGroupIDs()
 	if len(gids) == 0 {
 		return
 	}
@@ -66,7 +66,7 @@ func NotifyOps(client *http.Client, text string) {
 //	title      标题（已清理空白）
 //	extra      可选附加摘要：价格 / 地点 / 配图数等，多行用 ' / ' 分隔
 func NotifyOpsPublish(client *http.Client, groupID, userID int64, userCard, kind, title string, extra ...string) {
-	if len(conf.Cfg.Bot.OpsGroupIDs) == 0 {
+	if len(conf.Cfg.Bot.EffectiveOpsGroupIDs()) == 0 {
 		return
 	}
 	var b strings.Builder
@@ -93,7 +93,7 @@ func NotifyOpsPublish(client *http.Client, groupID, userID int64, userCard, kind
 //	role          申请人在目标群的角色（owner / admin / member / unknown / not_in_group）
 //	rawText       发起人原始消息（截断后），方便人工核查
 func NotifyOpsGroupAccessRequest(client *http.Client, requesterQQ int64, requesterName string, targetGroup int64, role string, rawText string) {
-	if len(conf.Cfg.Bot.OpsGroupIDs) == 0 {
+	if len(conf.Cfg.Bot.EffectiveOpsGroupIDs()) == 0 {
 		return
 	}
 	var b strings.Builder
