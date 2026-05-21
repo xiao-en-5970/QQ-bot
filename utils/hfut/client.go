@@ -404,13 +404,23 @@ func (c *Client) ListActiveGoods(ctx context.Context, userID uint, limit int) ([
 }
 
 // SeekGoodMatch 「收××」检索单条（与 hfut BotSeekGoodMatch 对齐）。
+//
+// 字段含义：
+//   - SellerQQ 仅在 OrphanSeller=true（卖家是孤儿 QQ 旗下账号）时非空
+//   - Images 是 hfut OSS 永久 URL；bot 命中后会用 send_group_forward_msg 把图片
+//     连同商品文字 + 联系方式打包成"聊天记录"发到群里（不直接发 QQ 临时图片，
+//     因 QQ 聊天记录会过期，OSS 持久）
 type SeekGoodMatch struct {
-	Title        string `json:"title"`
-	CreatedAt    string `json:"created_at"`
-	Price        int    `json:"price"`
-	Negotiable   bool   `json:"negotiable"`
-	SellerQQ     string `json:"seller_qq,omitempty"`
-	OrphanSeller bool   `json:"orphan_seller"`
+	ID           uint     `json:"id"`
+	Title        string   `json:"title"`
+	Content      string   `json:"content"`
+	Images       []string `json:"images,omitempty"`
+	Location     string   `json:"location,omitempty"`
+	CreatedAt    string   `json:"created_at"`
+	Price        int      `json:"price"`
+	Negotiable   bool     `json:"negotiable"`
+	SellerQQ     string   `json:"seller_qq,omitempty"`
+	OrphanSeller bool     `json:"orphan_seller"`
 }
 
 // SearchGoodsSeek GET /api/v1/bot/groups/:group_id/goods/seek

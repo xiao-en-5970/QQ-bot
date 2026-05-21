@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"qq_bot/global"
 	"qq_bot/model"
+	"qq_bot/utils/client_pool"
 	"qq_bot/utils/hfut"
 	"qq_bot/utils/kimi"
 	"qq_bot/utils/metrics"
@@ -177,19 +178,27 @@ func qqAvatarURL(userID int64) string {
 
 // dispatchSeekGoods 处理「收/求/求购/收购 + 物品」（无价场景）：
 //
-//  1. 在本校在售二手里搜一下，命中则给"你是否在找…"的提示
-//  2. 把求购意图作为 publish_good(category=2 求物品, price=0, negotiable=false) 落库——
-//     让别的同学也能在 app 里看到。前端不展示价格，也不挂"有偿"tag。
+//  1. 在本校在售二手里搜一下，命中则**异步**给求购者发"@用户 你可能在找：xxx"普通提示
+//     + 一个合并转发"聊天记录卡片"（商品文字 / 配图 / 联系方式），让用户能直接看到
+//     卖家信息。卡片不依赖 QQ 历史消息（OSS 图片永久有效；卖家是孤儿 QQ 号时附 QQ
+//     联系方式，非孤儿则提示在 app 内联系）。
+//  2. 不管是否命中，都把求购意图作为 publish_good(category=2 求物品, price=0,
+//     negotiable=false) 落库——让 app 用户也能看到。hfut 自动 7 天后下架（详见
+//     service.BotPublishGood 的 ttl 逻辑）。
 //
-// 两步合并成一条群里 ack；任一步失败不影响另一步该有的回执。
+// 两步异步并行：合并转发卡片不阻塞 PublishGood 调用，PublishGood 失败也不影响卡片
+// 发送。
 func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
 	title := strings.TrimSpace(a.SeekHint)
 	if title == "" {
 		return ackResult{Kind: ackKindIgnore}
 	}
 
-	// 第 1 步：检索现有在售
-	hintLine := buildSeekMatchHint(ctx, key.GroupID, title)
+	// 第 1 步：本校在售里检索匹配商品；命中即异步给求购者发卡片（不阻塞主流程）
+	if match := seekFirstMatch(ctx, key.GroupID, title); match != nil {
+		// goroutine 里发送，主流程继续；卡片自带 silentSuppressGroup 门
+		go sendSeekMatchForwardCard(key.GroupID, key.UserID, title, match)
+	}
 
 	// 第 2 步：上架为「求物品」（cat=2、price=0、非面议——前端隐藏价格、不挂"有偿"tag）
 	desc := strings.TrimSpace(a.Description)
@@ -200,14 +209,19 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 		desc = title
 	}
 
+	// 收集本次"上架求物品"涉及的 QQ message_id；让用户 reply 自己之前的求购消息说"已求到"时
+	// 能精确反查到 good。
+	botMsgIDs := collectBotMessageIDs(snap, a)
+
 	seekReq := hfut.PublishGoodReq{
-		UserID:     userID,
-		GroupID:    key.GroupID,
-		Title:      title,
-		Content:    desc,
-		Category:   2,
-		Negotiable: false,
-		Price:      0,
+		UserID:        userID,
+		GroupID:       key.GroupID,
+		Title:         title,
+		Content:       desc,
+		Category:      2,
+		Negotiable:    false,
+		Price:         0,
+		BotMessageIDs: botMsgIDs,
 	}
 	pubResp, pubErr := global.Hfut.PublishGood(ctx, seekReq)
 
@@ -222,14 +236,13 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 			if dupTitle == "" {
 				dupTitle = title
 			}
-			text := joinAckLines(hintLine, fmt.Sprintf("求物品「%s」已发过（id=%d）。回复 1=重复上架 / 2=下架旧的并上架", dupTitle, dup.ExistingID))
-			return ackResult{Text: text, Kind: ackKindDup}
+			return ackResult{
+				Text: fmt.Sprintf("求物品「%s」已发过（id=%d）。回复 1=重复上架 / 2=下架旧的并上架",
+					dupTitle, dup.ExistingID),
+				Kind: ackKindDup,
+			}
 		}
 		zaplog.Logger.Errorf("autoReply seek_goods PublishGood 失败 user=%d title=%q: %v", userID, title, pubErr)
-		// 至少把搜索提示发出来，让用户拿到价值
-		if hintLine != "" {
-			return ackResult{Text: hintLine, Kind: ackKindSuccess}
-		}
 		return ackResult{
 			Text: fmt.Sprintf("求物品「%s」未发出，稍后再试", title),
 			Kind: ackKindFail,
@@ -245,55 +258,127 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 	go NotifyOpsPublish(nil, key.GroupID, key.UserID, "", "求物品(无价/求购)", title,
 		fmt.Sprintf("发起人 user_id: %d", userID))
 
-	pubLine := fmt.Sprintf("已发求物品「%s」，等同学在 app 内联系你", title)
 	return ackResult{
-		Text: joinAckLines(hintLine, pubLine),
+		Text: fmt.Sprintf("已发求物品「%s」，等同学在 app 内联系你（7 天后自动撤回）", title),
 		Kind: ackKindSuccess,
 	}
 }
 
-// buildSeekMatchHint 取 SearchGoodsSeek 的第一条结果格式化成「你是否在找…」一行。
-// 群没配学校 / 无命中 / 网络错都返回空串——调用方自行决定是否拼接。
-func buildSeekMatchHint(ctx context.Context, groupID int64, q string) string {
+// seekFirstMatch 拉 SearchGoodsSeek 第一条命中；不命中返回 nil。
+// 失败（含群没配学校）也返回 nil 让上游平滑降级；warn 不打日志干扰主路径。
+func seekFirstMatch(ctx context.Context, groupID int64, q string) *hfut.SeekGoodMatch {
 	list, err := global.Hfut.SearchGoodsSeek(ctx, groupID, q, 5)
 	if err != nil {
 		if !errors.Is(err, hfut.ErrGroupNoSchool) {
-			zaplog.Logger.Warnf("autoReply seek_goods 搜索失败 group=%d q=%q: %v", groupID, q, err)
+			zaplog.Logger.Warnf("autoReply seek 检索失败 group=%d q=%q: %v", groupID, q, err)
 		}
-		return ""
+		return nil
 	}
 	if len(list) == 0 {
-		return ""
+		return nil
 	}
-	g := list[0]
-	created, perr := parseHFUTTime(g.CreatedAt)
-	if perr != nil {
-		zaplog.Logger.Warnf("autoReply seek_goods 解析 created_at=%q: %v", g.CreatedAt, perr)
-		created = time.Now()
+	return &list[0]
+}
+
+// sendSeekMatchForwardCard 把"匹配到的商品"打包成合并转发卡片发到求购群。
+//
+// 流程：
+//
+//  1. 先发普通 `@求购用户 你可能在找：xx商品名` 群消息——让用户能立刻看到 @ 提示
+//     而不必点开聊天记录卡片才知道是给自己的
+//  2. 再发合并转发包，里面 3 类节点按顺序：
+//     a) 文字节点：商品标题 / 价格 / 描述 / 地点 / 上架时间
+//     b) N 个图片节点：每张商品图一个节点（OSS 永久 URL，比 QQ 临时图片更稳）
+//     c) 末尾文字节点：联系方式（orphan 卖家给 QQ；非 orphan 提示 app 搜索）
+//
+// SilentMode 静默语义：两次发送都走现成的 silentSuppressGroup 门——非运维群在
+// 静默模式下都不发，与其它群消息出口一致。
+//
+// 失败仅打 warn 不重试——seek 命中只是"锦上添花"提示，发不出不影响主流程的上架。
+func sendSeekMatchForwardCard(groupID int64, seekerQQ int64, seekTitle string, g *hfut.SeekGoodMatch) {
+	if g == nil {
+		return
 	}
-	days := int(time.Since(created).Hours() / 24)
-	if days < 0 {
-		days = 0
+	httpClient := client_pool.NewClientPool()
+
+	// 第一条：@ 求购者，让他立刻看到提示
+	heading := fmt.Sprintf("你可能在找：%s", strings.TrimSpace(g.Title))
+	if err := SendGroupAtText(httpClient, groupID, seekerQQ, heading); err != nil {
+		zaplog.Logger.Warnf("autoReply seek 命中提示发送失败 group=%d qq=%d: %v",
+			groupID, seekerQQ, err)
+		// 失败仍继续发卡片——@ 提示丢了，卡片至少给求购者价值
 	}
-	// 价格展示与新规则对齐：
-	//   - negotiable=true → "面议"
-	//   - price>0       → "X 元"
-	//   - price=0 非面议 → "免费"（cat=1 二手里偶尔有"白送"）
-	var priceStr string
+
+	// 第二条：合并转发卡片
+	nodes := buildSeekForwardNodes(g, seekTitle)
+	if len(nodes) == 0 {
+		return
+	}
+	if err := SendGroupForwardMsg(httpClient, groupID, nodes); err != nil {
+		zaplog.Logger.Warnf("autoReply seek 合并转发卡片发送失败 group=%d good=%d: %v",
+			groupID, g.ID, err)
+	}
+}
+
+// buildSeekForwardNodes 构造合并转发卡片的节点序列。
+//
+// 节点顺序固定：[文字 商品信息] → [图 1] [图 2] … [图 N] → [文字 联系方式]
+// 图最多展示 9 张（QQ 单条合并转发节点数本身没硬限，但群里展示太多滚不动；剩余的
+// 让用户进 app 看）。
+func buildSeekForwardNodes(g *hfut.SeekGoodMatch, seekTitle string) []model.ForwardNodeIn {
+	nodes := make([]model.ForwardNodeIn, 0, 2+len(g.Images))
+
+	// 节点 1：商品文字
+	var b strings.Builder
+	fmt.Fprintf(&b, "商品：%s", strings.TrimSpace(g.Title))
+
+	// 价格展示与"已上架"回执对齐
 	switch {
 	case g.Negotiable:
-		priceStr = "面议"
+		b.WriteString("\n价格：面议")
 	case g.Price > 0:
-		priceStr = fmt.Sprintf("%g 元", float64(g.Price)/100)
+		fmt.Fprintf(&b, "\n价格：%g 元", float64(g.Price)/100)
 	default:
-		priceStr = "免费"
+		b.WriteString("\n价格：免费")
 	}
-	contact := "app内联系"
+	if loc := strings.TrimSpace(g.Location); loc != "" {
+		fmt.Fprintf(&b, "\n地点：%s", loc)
+	}
+	if created, perr := parseHFUTTime(g.CreatedAt); perr == nil {
+		days := int(time.Since(created).Hours() / 24)
+		if days < 0 {
+			days = 0
+		}
+		fmt.Fprintf(&b, "\n上架：约 %d 天前", days)
+	}
+	if content := strings.TrimSpace(g.Content); content != "" {
+		fmt.Fprintf(&b, "\n描述：%s", truncateForLog(content, 200))
+	}
+	nodes = append(nodes, BuildForwardNodeText(b.String()))
+
+	// 节点 2..N+1：商品图
+	const maxImages = 9
+	for i, url := range g.Images {
+		if i >= maxImages {
+			break
+		}
+		url = strings.TrimSpace(url)
+		if url == "" {
+			continue
+		}
+		nodes = append(nodes, BuildForwardNodeImage(url))
+	}
+
+	// 节点末尾：联系方式
+	var contact string
 	if g.OrphanSeller && strings.TrimSpace(g.SellerQQ) != "" {
-		contact = fmt.Sprintf("QQ：%s", strings.TrimSpace(g.SellerQQ))
+		contact = fmt.Sprintf("联系卖家：QQ %s", strings.TrimSpace(g.SellerQQ))
+	} else {
+		contact = fmt.Sprintf("联系卖家：请在 app 内搜索「%s」查看完整信息和私聊", strings.TrimSpace(g.Title))
 	}
-	return fmt.Sprintf("你是否在找「%s」，约 %d 天前上架，价格 %s，联系方式：%s",
-		strings.TrimSpace(g.Title), days, priceStr, contact)
+	nodes = append(nodes, BuildForwardNodeText(contact))
+
+	return nodes
 }
 
 // firstTextFromSnap 从窗口里挑第一条非空文本，作为 publish_good 的 content 兜底。
@@ -456,6 +541,13 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 	}
 	if len(images) > 0 {
 		fmt.Fprintf(&b, "，配图 %d 张", len(images))
+	}
+	// QQ 上架的商品有自动有效期：二手 30 天 / 求物品 7 天（详见 hfut
+	// service.BotPublishGood 里的 goodBotTTLOnSale / goodBotTTLSeek）；提醒用户。
+	if a.Category == 2 {
+		b.WriteString("（7 天后自动撤回）")
+	} else {
+		b.WriteString("（30 天后自动下架）")
 	}
 	// 记录"最近一条"——给后续"不要了 / 不卖了"上下文化处理用
 	if resp != nil {
