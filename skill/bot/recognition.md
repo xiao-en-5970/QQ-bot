@@ -27,6 +27,27 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 
 ---
 
+## 合并转发（聊天记录）展开
+
+群里偶尔有人会**一次性转发一整段聊天记录**（QQ 的"合并转发"功能），事件 segment 形如：
+
+```
+{"type":"forward","data":{"id":"7234567890123456789"}}
+```
+
+直接喂 Kimi 只看得到 `[forward]` 占位符，里面的上架文字 / 配图全丢了。处理路径：
+
+- `logic/handle_at_message.go::handleAutoReply` 检测到 forward segment → 起 goroutine 走
+  `logic/forward_expand.go::expandAndPushForward`
+- `service/get_forward_msg.go` 调 NapCat `/get_forward_msg` 拿子节点列表
+- 每个节点合成"伪 group_message 事件"：**UserID / Sender 用外层转发者**（不用内层 sender，
+  避免给不在群里的用户建桶），Segments 用节点的 message
+- 按聊天记录顺序依次 `autoReplyMgr.Push` 进**同一桶**，复用窗口聚合 + 三态切分
+- 嵌套聊天记录递归展开，最多 3 层；超过深度该层保留原 forward 段
+- fetch 失败兜底：原消息仍 Push 一次，让 Kimi 看到 `[合并转发(未展开)]` 占位符
+
+---
+
 ## "已出/已找到" 消歧（多在售反问）
 
 实现位置：`logic/disambig_state.go` + `auto_reply.go::Push` + `auto_reply_dispatch.go::dispatchOffShelf/dispatchCloseQuestion`。

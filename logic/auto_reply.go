@@ -439,6 +439,10 @@ func buildRecognizeInput(key autoReplyBucketKey, userCard string, snap []autoRep
 				segs = append(segs, "[表情]")
 			case "reply":
 				segs = append(segs, "[引用回复]")
+			case "forward":
+				// 走到这里说明 expandAndPushForward 失败兜底——子消息没拿到，
+				// 给 Kimi 一个明确的占位符，避免误识别为别的业务动作。
+				segs = append(segs, "[合并转发(未展开)]")
 			default:
 				segs = append(segs, "["+seg.Type+"]")
 			}

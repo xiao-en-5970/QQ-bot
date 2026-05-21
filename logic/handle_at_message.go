@@ -145,8 +145,19 @@ func handleAtCommand(client *http.Client, msg *model.Message, botID int64) {
 // 真正的 LLM 识别 / 回执 / 上架在 logic/auto_reply.go 的扫描协程里做。
 //
 // 入桶是 O(1) 操作（map + slice append + mutex），不会阻塞 wsclient 协程。
+//
+// 特例：消息里含 forward segment（"聊天记录"合并转发）时——单独走 expandAndPushForward：
+// 调 NapCat /get_forward_msg 拿子节点，把每条子消息作为转发者的伪消息按顺序 Push
+// 进同一桶，让聊天记录里的上架文字 + 配图能被现有窗口聚合 / 三态切分正常识别。
+// 这条网络 IO 不能在 wsclient 协程里同步做，所以放到独立 goroutine。
 func handleAutoReply(client *http.Client, msg *model.Message) {
 	_ = client // 当前不在入桶阶段调用 client；扫描协程会自带一份 client 用来发回执
+
+	if containsForwardSegment(msg) {
+		go expandAndPushForward(msg)
+		return
+	}
+
 	// 展示名**只**使用 sender.nickname（QQ 全局昵称），**绝对不**回退到 sender.card（群名片）。
 	//
 	// 为什么不允许群名片：app 端 author 卡片 / 个人展示页要展示用户的"QQ 身份"，
@@ -214,6 +225,11 @@ func flattenMessageText(msg *model.Message) string {
 			b.WriteString("[表情]")
 		case "reply":
 			b.WriteString("[引用回复]")
+		case "forward":
+			// forward 段正常会在 handleAutoReply 入口被 expandAndPushForward 异步展开；
+			// 走到这里只可能是"fetch 失败兜底"分支——保留一个明显的占位符让 Kimi 知道
+			// 原消息里有合并转发存在，但内容拿不到。
+			b.WriteString("[合并转发(未展开)]")
 		default:
 			b.WriteString("[" + seg.Type + "]")
 		}
