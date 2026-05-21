@@ -15,9 +15,9 @@ import (
 //
 // 返回 NapCat 给的 message_id（成功时）+ error（任何路径上的错误）。
 //
-// 灰度静默 (SilentMode) 开启时一律静默——不发 NapCat、返回 (0, nil)，让上游
-// 业务（hfut 反向触发的 QQ 绑定验证码 / 解绑通知 / 订单加急等）认为发送"成功"
-// 但实际没下发。详见 logic/silent_gate.go。
+// 灰度静默 (SilentMode) **不影响私聊**——QQ 绑定 / 解绑验证码、订单加急、群接入
+// 申请回执等用户主动触发的链路需要保留。silentSuppressPrivate 仅作为未来精细化
+// 控制的预留 hook，当前永远 return false。
 func SendPrivateText(client *http.Client, qq int64, text string) (int64, error) {
 	if text == "" {
 		return 0, fmt.Errorf("send_private_text: text 不能为空")

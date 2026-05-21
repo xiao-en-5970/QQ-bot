@@ -376,19 +376,19 @@ type Bot struct {
 	OpsGroupID int64 `mapstructure:"ops_group_id,omitempty"`
 
 	// SilentMode 灰度静默模式。上线前实战演练时打开：
-	//   - 任何对**非 OpsGroupIDs** 的群消息（识别回执 / @bot 命令 / dup ack / 反向 internal API
-	//     发出的群消息）都被静默掉，bot 不在群里发任何字
-	//   - 任何私聊（群接入申请回执、hfut 反向触发的 QQ 绑定验证码 / 解绑通知 / 订单加急
-	//     私聊等）都被静默掉
+	//   - 任何对**非 OpsGroupIDs** 的群消息（识别回执 / @bot 命令 / dup ack / 反向 internal
+	//     API 发出的群消息）都被静默掉，bot 不在群里发任何字
 	//   - 任何群文件上传（jm pdf / pix）也静默
 	//   - **运维群仍正常**：`NotifyOps*` 系列发往 OpsGroupIDs 的运维提醒原样下发，
 	//     ops_query @bot 的运维查询也照常工作
+	//   - **私聊不受影响**：QQ 绑定 / 解绑验证码、订单加急、群接入申请回执等均正常下发。
+	//     这是用户主动触发的链路，不会打扰群友，灰度期间应保留以便真实用户能完成绑定
 	//
 	// 业务侧（hfut 数据库写入 / Kimi 识别 / bot_dispatch_event 记录等）**不受影响**——
-	// 静默只是关掉所有"对外可见的 QQ 消息出口"，目的是在真实校园群里跑识别准确率
-	// 实测，而群友感受不到 bot 存在。
+	// 静默只是关掉"群里对外可见的消息出口"，目的是在真实校园群里跑识别准确率实测，
+	// 而群友感受不到 bot 存在。
 	//
-	// env: BOT_SILENT_MODE=true|false（默认 false）
+	// env: BOT_SILENT_MODE=true|false（默认 false）；admin UI 也可改（bot_runtime_config 表）
 	SilentMode bool `mapstructure:"silent_mode,omitempty"`
 }
 
@@ -451,12 +451,16 @@ func (b Bot) IsSilentForGroup(groupID int64) bool {
 	return !b.IsOpsGroup(groupID)
 }
 
-// IsSilentForPrivate 私聊是否应被静默——SilentMode 开就一律 true。
+// IsSilentForPrivate 私聊是否应被静默——**永远 false**。
 //
-// 灰度演练阶段不发任何私聊给用户（含 QQ 绑定验证码、群接入申请回执、订单加急等），
-// 即便消息触发方是 hfut。详见 SilentMode 字段注释。
+// 设计取舍：SilentMode 灰度静默的核心目标是"用户在群里感受不到 bot"，但 QQ 绑定 /
+// 解绑流程依赖私聊验证码——这条链路属于"用户主动操作 App 触发的私聊"，不会打扰群
+// 友，灰度演练阶段也应该让真实用户能完成绑定。所以私聊出口（SendPrivateText）保留，
+// 不受 SilentMode 影响。
+//
+// 私聊出口包括：QQ 绑定 / 解绑验证码、订单加急私聊、群接入申请回执等，都允许下发。
 func (b Bot) IsSilentForPrivate() bool {
-	return b.effectiveSilentMode()
+	return false
 }
 
 type Config struct {

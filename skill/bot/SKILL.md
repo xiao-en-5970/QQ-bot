@@ -120,7 +120,7 @@
 | `HFUT_API_JWT_SECRET` | bot 跟 hfut 共享的 service-to-service JWT secret（HS256） | — |
 | `BOT_INTERNAL_API_PORT` | bot 内部 HTTP server 端口（仅 internal network 监听） | 8090 |
 | `BOT_OPS_GROUP_IDS` | 运维通知群（逗号分隔），同时也是"运维查询群" | `1084352497` |
-| `BOT_SILENT_MODE` | 灰度静默：开启后非运维群 + 私聊全部静默不发，hfut 落库 / 运维群通知照常（详见 `verbosity.md`） | false |
+| `BOT_SILENT_MODE` | 灰度静默：开启后非运维群消息 + 群文件全部静默，私聊 / hfut 落库 / 运维群通知照常（详见 `verbosity.md`） | false |
 
 ---
 
