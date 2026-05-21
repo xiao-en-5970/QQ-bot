@@ -33,6 +33,7 @@ import (
 	"qq_bot/utils/kimi"
 	"qq_bot/utils/metrics"
 	zaplog "qq_bot/utils/zap"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -130,7 +131,7 @@ func dispatchActionToHfut(
 	case "publish_answer":
 		return dispatchPublishAnswer(ctx, key.GroupID, upsert.UserID, action)
 	case "off_shelf":
-		return dispatchOffShelf(ctx, key, upsert.UserID, action)
+		return dispatchOffShelf(ctx, key, upsert.UserID, snap, action)
 	case "close_question":
 		return dispatchCloseQuestion(ctx, key, upsert.UserID, action)
 	case "seek_goods":
@@ -370,20 +371,26 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 		negotiable = true
 	}
 
+	// 收集本次上架涉及的全部 QQ message_id：snap 里每条外层消息的 MessageID + 模型
+	// 给出的 ImageMessageIDs / SourceMessageIDs；落到 hfut goods.bot_message_ids 后，
+	// 用户 reply 任一条都能反查到 good 直接下架（详见 LookupActiveGoodByMessageID）。
+	botMsgIDs := collectBotMessageIDs(snap, a)
+
 	// resp 里有 GoodID 用于"最近一条"快速查找；不在群里展示给用户——
 	// 用户在 app "我的发布" 列表能看到刚发的，没必要再给个数字增加阅读负担。
 	pubReq := hfut.PublishGoodReq{
-		UserID:     userID,
-		GroupID:    groupID,
-		Title:      strings.TrimSpace(a.Title),
-		Content:    strings.TrimSpace(a.Description),
-		Category:   int16(a.Category),
-		Negotiable: negotiable,
-		Bargain:    a.Bargain,
-		Price:      priceCents,
-		Stock:      a.Stock, // <=0 时 hfut 后端按 1 兜底（详见 BotPublishGood 注释）
-		Location:   strings.TrimSpace(a.Location),
-		Images:     images,
+		UserID:        userID,
+		GroupID:       groupID,
+		Title:         strings.TrimSpace(a.Title),
+		Content:       strings.TrimSpace(a.Description),
+		Category:      int16(a.Category),
+		Negotiable:    negotiable,
+		Bargain:       a.Bargain,
+		Price:         priceCents,
+		Stock:         a.Stock, // <=0 时 hfut 后端按 1 兜底（详见 BotPublishGood 注释）
+		Location:      strings.TrimSpace(a.Location),
+		Images:        images,
+		BotMessageIDs: botMsgIDs,
 	}
 	resp, err := global.Hfut.PublishGood(ctx, pubReq)
 	if err != nil {
@@ -778,8 +785,40 @@ func dispatchCloseQuestion(ctx context.Context, key autoReplyBucketKey, userID u
 // off_shelf — 下架商品
 // =============================================================================
 
-func dispatchOffShelf(ctx context.Context, key autoReplyBucketKey, userID uint, a kimi.RecognizeAction) ackResult {
+func dispatchOffShelf(ctx context.Context, key autoReplyBucketKey, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
 	hint := strings.TrimSpace(a.OffShelfHint)
+
+	// 0. **reply 精确定位**：用户在群里回复（reply）自己之前的上架消息说"已出"——
+	//    bot 解析 reply.id 后调 hfut 反查 goods.bot_message_ids，命中即直接下架，
+	//    跳过模糊匹配 + 多结果消歧。本通道仅对"用户消息含 reply 段"生效；reply.id
+	//    指向的不是自己的上架消息（如 reply 别人的消息）会 (nil, nil) 平滑降级。
+	if replyMsgID := firstReplyTargetMsgID(snap); replyMsgID != 0 {
+		good, err := global.Hfut.LookupActiveGoodByMessageID(ctx, userID, replyMsgID)
+		if err != nil {
+			zaplog.Logger.Warnf("autoReply LookupActiveGoodByMessageID 失败 user=%d msg=%d: %v——降级到模糊匹配",
+				userID, replyMsgID, err)
+		} else if good != nil {
+			zaplog.Logger.Infof("autoReply reply 命中 good=%d title=%q user=%d reply_msg=%d",
+				good.ID, good.Title, userID, replyMsgID)
+			if err := global.Hfut.OffShelfGood(ctx, good.ID, userID); err != nil {
+				zaplog.Logger.Errorf("autoReply reply 路径 OffShelfGood 失败 good=%d: %v", good.ID, err)
+				return ackResult{
+					Text: fmt.Sprintf("「%s」下架失败，稍后再试", good.Title),
+					Kind: ackKindFail,
+				}
+			}
+			kindLabel := "二手"
+			if good.Category == 2 {
+				kindLabel = "求物品"
+			}
+			return ackResult{
+				Text: fmt.Sprintf("已下架%s「%s」", kindLabel, good.Title),
+				Kind: ackKindSuccess,
+			}
+		}
+		// good == nil：reply 没指向自己的上架消息（可能 reply 别人的、可能 good 已下架），
+		// 静默降级到下面的模糊匹配 / 消歧链路。
+	}
 
 	// hint 为空时优先看"最近一条上架"——用户的"不要了 / 不卖了"通常是指刚发的那条；
 	// 命中即直接 OffShelfGood（cat=1 / cat=2 都按相同接口下架），文案区分"二手 / 求物品"。
@@ -934,6 +973,55 @@ func matchQuestion(qs []*hfut.OpenQuestion, hint string) *hfut.OpenQuestion {
 		}
 	}
 	return nil
+}
+
+// firstReplyTargetMsgID 在快照里找第一个含 reply 段的消息，把它指向的被回复 message_id
+// 返回（int64）。没有 reply 段 / 解析失败 / id == 0 时返回 0。
+//
+// 用例：用户在群里回复（QQ "回复消息"功能）自己之前 bot 上架成功的消息说"已出"——
+// bot 拿到 reply.id 即可直接定位 good，跳过模糊匹配 + 反问消歧。
+func firstReplyTargetMsgID(snap []autoReplyMsg) int64 {
+	for _, m := range snap {
+		for _, seg := range m.Segments {
+			if seg.Type != "reply" {
+				continue
+			}
+			rd, err := model.AsReplyData(seg.Data)
+			if err != nil || rd.ID == "" {
+				continue
+			}
+			id, err := strconv.ParseInt(strings.TrimSpace(rd.ID), 10, 64)
+			if err != nil || id == 0 {
+				continue
+			}
+			return id
+		}
+	}
+	return 0
+}
+
+// collectBotMessageIDs 把本次上架"涉及到的所有 QQ message_id" 合并去重。
+//
+// 来源三个：
+//  1. snap 里每条 autoReplyMsg.MessageID（外层 OneBot 群消息 ID）
+//  2. action.SourceMessageIDs（Kimi 给出的"主文本来源" 消息 ID）
+//  3. action.ImageMessageIDs（Kimi 给出的"关联图片来源"消息 ID）
+//
+// 三个来源大概率重叠（snap 已经包含全部），但模型给的两个字段是按"它认为属于本动作"
+// 的子集；这里把"实际窗口里出现过的所有 message_id" 一起塞过去，确保后续用户 reply
+// 任意一条都能反查到 good——比"只信模型"更稳。
+//
+// 上层 hfut.PublishGoodReq 会再做一次 dedup + 去 0；这里不重复做。
+func collectBotMessageIDs(snap []autoReplyMsg, a kimi.RecognizeAction) []int64 {
+	ids := make([]int64, 0, len(snap)+len(a.SourceMessageIDs)+len(a.ImageMessageIDs))
+	for _, m := range snap {
+		if m.MessageID != 0 {
+			ids = append(ids, m.MessageID)
+		}
+	}
+	ids = append(ids, a.SourceMessageIDs...)
+	ids = append(ids, a.ImageMessageIDs...)
+	return ids
 }
 
 // matchGood 同上，找 title 含 hint 的商品。

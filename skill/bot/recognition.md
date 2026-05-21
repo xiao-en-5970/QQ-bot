@@ -27,6 +27,39 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 
 ---
 
+## Reply 段精确下架
+
+如果用户在 QQ 群里**回复**（QQ 客户端"回复消息"功能）自己之前 bot 上架成功的消息说"已出"，bot 不应再问"下架哪件"——reply 段里已经明确指向了某一条具体消息。
+
+数据流：
+
+- **上架时**：`dispatchPublishGood` 调 `collectBotMessageIDs(snap, action)` 收集本次上架涉及到的全部 QQ message_id（snap 里每条外层消息 ID + Kimi 给的 `image_message_ids` / `source_message_ids`），合并去重后通过 `PublishGoodReq.BotMessageIDs` 写到 hfut `goods.bot_message_ids` 列（`BIGINT[]` + GIN 索引）。
+- **下架时**：`dispatchOffShelf` 顶部先调 `firstReplyTargetMsgID(snap)` 解析 reply 段的被引用 `message_id`；命中即调 `hfut.LookupActiveGoodByMessageID(userID, msgID)` 反查 `WHERE ? = ANY(bot_message_ids)`；命中返回 good → 直接 `OffShelfGood`，跳过模糊匹配 + 反问消歧。
+- **未命中降级**：reply 指向的不是自己的上架消息（reply 别人 / good 已下架），平滑落回原模糊匹配 / 消歧链路。
+
+涉及代码：
+
+- bot：`model.AsReplyData`、`logic/auto_reply_dispatch.go::firstReplyTargetMsgID` + `collectBotMessageIDs` + `dispatchOffShelf` 顶部 reply 通道、`utils/hfut/client.go::LookupActiveGoodByMessageID`
+- hfut：`goods.bot_message_ids BIGINT[]` 列（迁移 `migrate_goods_bot_message_ids.sql`）、`dao.Good().FindActiveByBotMessageID`、`service.BotFindActiveGoodByMessageID`、`GET /api/v1/bot/users/:user_id/goods/by-msg/:msg_id`
+
+---
+
+## 纯图 OCR 上架
+
+很多用户用美图秀秀给商品图加水印（"还剩一半 3 元" / "除螨喷雾只用了两次 3 元"）然后直接发图，**不补任何文字**。原行为是 `scanOnce` 沉默后静默清空——会把这部分用户的上架意图全丢。
+
+新分支：
+
+1. `scanOnce` 检测到 silence + `!bucketHasMeaningfulText(b.Msgs)` → 把整桶标 `imageOnly=true`，走 `processImageOnlySnapshot` 而非清空。
+2. `processImageOnlySnapshot` 遍历桶里每张图，**单图独立**调 `kimi.RecognizeFromImage(ctx, url, msgID)` 让 Moonshot vision 模型 OCR + 抽取商品信息。
+3. 视觉模型固定走 `Cfg.Gpt.VisionModel`（默认 `moonshot-v1-32k-vision-preview`，env `GPT_VISION_MODEL`）；由于 `go-moonshot` SDK 不支持 vision content array，绕过 SDK 走原生 `http.Client` 发请求。
+4. 每张图返回的 `RecognizeAction` 强制 `Category=1`、`ImageMessageIDs=[msgID]`、`SourceMessageIDs=[msgID]`，复用 `dispatchActionToHfut` 走"重复 ack / dup ack / 落库 / 写 bot_message_ids" 等完整链路。
+5. 单图 OCR 失败 / type=none 跳过下一张；不调多图归一逻辑——这里 prompt 假设是"独立一张图独立一件商品"。
+
+涉及代码：`utils/kimi/vision_ocr.go::RecognizeFromImage`、`logic/auto_reply_image_only.go::processImageOnlySnapshot` + `runVisionOnOneImage`、`logic/auto_reply.go::scanOnce` 的纯图分支。
+
+---
+
 ## 合并转发（聊天记录）展开
 
 群里偶尔有人会**一次性转发一整段聊天记录**（QQ 的"合并转发"功能），事件 segment 形如：

@@ -199,6 +199,11 @@ type PublishGoodReq struct {
 	Stock      int      `json:"stock,omitempty"` // 库存数量；<=0 时后端按 1 兜底
 	Location   string   `json:"location"`
 	Images     []string `json:"images"`
+	// BotMessageIDs 本次上架涉及的全部 QQ message_id 合集（外层消息 ID + Kimi 给出的
+	// image_message_ids / source_message_ids），hfut 落到 goods.bot_message_ids；后续
+	// 用户 reply 自己之前的上架消息说"已出"时，bot 用 reply.id 调
+	// LookupActiveGoodByMessageID 直接定位 good，跳过模糊匹配 + 消歧反问。
+	BotMessageIDs []int64 `json:"bot_message_ids,omitempty"`
 	// Force=true 时后端跳过 title 重复检查。给 bot 反问"重复上架"路径用——
 	// 用户在群里选择"1 重复上架"后，bot 用 Force=true 重发原 request 强制创建。
 	Force bool `json:"force,omitempty"`
@@ -409,6 +414,26 @@ type SeekGoodMatch struct {
 }
 
 // SearchGoodsSeek GET /api/v1/bot/groups/:group_id/goods/seek
+// LookupActiveGoodByMessageID 用 QQ message_id 反查"该用户名下、bot_message_ids 数组
+// 含此 ID 且仍在售"的商品；典型用例是用户 reply 自己之前的上架消息说"已出"。
+//
+// 命中返回 *ActiveGood；未命中返回 (nil, nil)——hfut 端为了让 bot 平滑降级，未命中
+// 用 HTTP 200 + data.good=null 表达，**不**当错误返回。所以这里也以 (nil, nil) 兜底。
+func (c *Client) LookupActiveGoodByMessageID(ctx context.Context, userID uint, msgID int64) (*ActiveGood, error) {
+	if msgID == 0 {
+		return nil, nil
+	}
+	path := "/api/v1/bot/users/" + strconv.FormatUint(uint64(userID), 10) +
+		"/goods/by-msg/" + strconv.FormatInt(msgID, 10)
+	var out struct {
+		Good *ActiveGood `json:"good"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Good, nil
+}
+
 func (c *Client) SearchGoodsSeek(ctx context.Context, groupID int64, q string, limit int) ([]SeekGoodMatch, error) {
 	if limit <= 0 {
 		limit = 5

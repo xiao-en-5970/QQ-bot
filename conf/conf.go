@@ -320,6 +320,11 @@ type Gpt struct {
 	SystemPrompt         string `mapstructure:"system_prompt"`
 	Model                string `mapstructure:"model"`
 	RecognizeModel       string `mapstructure:"recognize_model"`
+	// VisionModel 用于 OCR 上架的多模态模型。默认 moonshot-v1-32k-vision-preview；
+	// 仅当窗口里只有图片、用户没补任何业务文字、又过了沉默期时触发——对每张图单独
+	// 调一次 vision API 让模型直接从图片里抽 title / price 等再上架。
+	// env: GPT_VISION_MODEL
+	VisionModel          string `mapstructure:"vision_model"`
 	QuotaCooldownSeconds int    `mapstructure:"quota_cooldown_seconds"`
 	QuotaErrorThreshold  int    `mapstructure:"quota_error_threshold"`
 }
@@ -837,6 +842,11 @@ func applyDefaults(c *Config) {
 	}
 	if strings.TrimSpace(c.Gpt.RecognizeModel) == "" {
 		c.Gpt.RecognizeModel = "kimi-k2-0905-preview"
+	}
+	if strings.TrimSpace(c.Gpt.VisionModel) == "" {
+		// Moonshot 的视觉模型默认选 32k 上下文足够（OCR 提取的文本通常很短）。
+		// 想换成 128k vision 时设 env GPT_VISION_MODEL=moonshot-v1-128k-vision-preview。
+		c.Gpt.VisionModel = "moonshot-v1-32k-vision-preview"
 	}
 	if c.Gpt.QuotaCooldownSeconds <= 0 {
 		c.Gpt.QuotaCooldownSeconds = 1800 // 30 分钟

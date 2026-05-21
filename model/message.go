@@ -148,6 +148,35 @@ func AsAtData(data interface{}) (AtData, error) {
 	return out, err
 }
 
+// AsReplyData 把 segment.Data 当作 OB11MessageReply.data 解析。
+//
+// id 字段在 OneBot11 文档里规定是 string（被引用消息的 message_id），但 NapCat 不同
+// 版本可能下发 number / json.Number，所以这里和 AsAtData 一样宽容解析三类。
+//
+// 用例：bot 识别用户在群里 reply 自己之前的上架消息说"已出"，从这里取 id 后
+// 反查 goods.bot_message_ids 直接定位 good，跳过模糊匹配 + 反问消歧。
+func AsReplyData(data interface{}) (ReplyData, error) {
+	if m, ok := data.(map[string]interface{}); ok {
+		out := ReplyData{}
+		switch v := m["id"].(type) {
+		case string:
+			out.ID = v
+		case float64:
+			out.ID = fmt.Sprintf("%d", int64(v))
+		case int:
+			out.ID = fmt.Sprintf("%d", v)
+		case int64:
+			out.ID = fmt.Sprintf("%d", v)
+		case json.Number:
+			out.ID = v.String()
+		}
+		return out, nil
+	}
+	var out ReplyData
+	err := decodeSegment(data, &out)
+	return out, err
+}
+
 // AsImageData 把 segment.Data 当作 OB11MessageImage.data 解析。
 //
 // 兼容旧 LLOneBot 的 camelCase 字段 subType。

@@ -206,8 +206,9 @@ func (m *autoReplyManager) scanOnce() {
 	now := time.Now()
 
 	type ready struct {
-		key      autoReplyBucketKey
-		snapshot []autoReplyMsg
+		key       autoReplyBucketKey
+		snapshot  []autoReplyMsg
+		imageOnly bool // true = 纯图 tail，走 processImageOnlySnapshot 逐图 vision OCR
 	}
 	var ready_ []ready
 
@@ -222,14 +223,16 @@ func (m *autoReplyManager) scanOnce() {
 		// Silence 触发：检查 tail 是否含业务文字（text 消息）。
 		//
 		//   - 含 text：模式 B 半成品（`文 图*`）正常 flush 走 Kimi 识别
-		//   - 不含 text：纯图序列——按用户明示"纯图片不处理"，**静默清空**不调 Kimi
+		//   - 不含 text：纯图序列——交给 **vision OCR 单图分发** 路径，每张图
+		//     单独调一次 Moonshot vision API，按图上的 OCR 文本独立上架。
 		//
 		// 这是新切分逻辑的兜底：Push 时已经把"完整 unit"切走立即 flush 了，剩在桶里
-		// 的 tail 要么是含 text 的模式 B 半成品，要么是孤立的纯图（用户发图后没补任何
-		// 文字 → 不识别）。
+		// 的 tail 要么是含 text 的模式 B 半成品，要么是孤立的纯图。后者以前直接
+		// 静默清空，现在改成走 OCR——很多用户用美图秀秀加水印标价后直接发图，
+		// 不补任何文字，OCR 就能把"还剩一半 3 元" / "除螨喷雾只用了两次 3 元"
+		// 这种水印识别出来上架。
 		if !bucketHasMeaningfulText(b.Msgs) {
-			zaplog.Logger.Debugf("autoReply silence 静默清空纯图桶 group=%d user=%d msgs=%d",
-				k.GroupID, k.UserID, len(b.Msgs))
+			ready_ = append(ready_, ready{key: k, snapshot: b.Msgs, imageOnly: true})
 			b.Msgs = nil
 			continue
 		}
@@ -239,6 +242,10 @@ func (m *autoReplyManager) scanOnce() {
 	m.mu.Unlock()
 
 	for _, r := range ready_ {
+		if r.imageOnly {
+			m.processImageOnlySnapshot(r.key, r.snapshot)
+			continue
+		}
 		m.processSnapshot(r.key, r.snapshot)
 	}
 }

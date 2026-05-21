@@ -114,6 +114,7 @@
 | `GPT_API_KEY` | Moonshot API Key | 空 = 不启用聊天 |
 | `GPT_MODEL` | @bot chat 用模型（如 `moonshot-v1-auto` / `kimi-latest`） | `moonshot-v1-auto` |
 | `GPT_RECOGNIZE_MODEL` | 业务识别用模型（识别要稳准，建议 K2） | `kimi-k2-0905-preview` |
+| `GPT_VISION_MODEL` | 纯图 OCR 上架用的视觉模型（详见 `recognition.md` "纯图 OCR 上架" 段） | `moonshot-v1-32k-vision-preview` |
 | `GPT_QUOTA_COOLDOWN_SECONDS` | 连续 quota 错触发熔断后冷却时长（秒） | 1800 |
 | `GPT_QUOTA_ERROR_THRESHOLD` | 触发熔断所需的连续 quota 错次数 | 3 |
 | `HFUT_API_URL` | hfut 后端 base URL | — |
