@@ -259,7 +259,7 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 		fmt.Sprintf("发起人 user_id: %d", userID))
 
 	return ackResult{
-		Text: fmt.Sprintf("已发求物品「%s」，等同学在 app 内联系你（7 天后自动撤回）", title),
+		Text: fmt.Sprintf("已发求物品「%s」，等同学在 app 内联系你", title),
 		Kind: ackKindSuccess,
 	}
 }
@@ -542,13 +542,9 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 	if len(images) > 0 {
 		fmt.Fprintf(&b, "，配图 %d 张", len(images))
 	}
-	// QQ 上架的商品有自动有效期：二手 30 天 / 求物品 7 天（详见 hfut
-	// service.BotPublishGood 里的 goodBotTTLOnSale / goodBotTTLSeek）；提醒用户。
-	if a.Category == 2 {
-		b.WriteString("（7 天后自动撤回）")
-	} else {
-		b.WriteString("（30 天后自动下架）")
-	}
+	// 注意：QQ 上架的商品 / 求物品有自动有效期（二手 30 天、求物品 7 天，由 hfut
+	// service.BotPublishGood 自动设 deadline），但**不在群回执里提**——用户对这件事
+	// 不需要感知，app 端 deadline 标签会显示剩余时间，群里少一行减少干扰。
 	// 记录"最近一条"——给后续"不要了 / 不卖了"上下文化处理用
 	if resp != nil {
 		recentGoodMgr.Save(key, userID, resp.GoodID, strings.TrimSpace(a.Title), a.Category)
