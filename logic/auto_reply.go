@@ -173,24 +173,18 @@ func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *mod
 		return
 	}
 
-	// Unit 切分：按用户上架习惯把桶里序列切成多个 unit（每个 unit 含 ≤ 1 个 text）。
+	// 不再做 unit 切分立即 flush：所有消息攒在桶里，等 60s 沉默触发后 scanOnce 整桶
+	// 一次性送 Kimi 识别。
 	//
-	//   - 模式 A `图 图 图 文`：text 立即闭合 unit → completed_units 里有内容 → 立即 flush
-	//   - 模式 B `文 图 图 图`：text 起头等图，只有再来一个 text 才闭合
-	//   - 末尾的 unit（含 text 但还没遇到右边界的 text）留在桶里，等 silence/下一个 text
-	//   - 纯图 tail 留在桶里，等 silence 后由 scanOnce 静默清空（不调 Kimi）
+	// 这是一次设计权衡：早期版本会按"图 图 图 文 → 立即闭合"的模式提前 flush，让用户
+	// 上架后秒回执；但实际场景里用户在一次发布中会图文交杂（"图 图 图 视频 商品描述
+	// 长文 图 价格"），早期切分会在第一段文字处截止，把后续的价格段当成新一次上架
+	// 识别——经常导致价格丢失。
 	//
-	// 详见 auto_reply_unit_split.go 注释。
-	completed, tail := splitBucketIntoUnits(b.Msgs)
-	if len(completed) > 0 {
-		b.Msgs = tail
-		for _, unit := range completed {
-			unit := unit
-			go m.processSnapshot(key, unit)
-		}
-		return
-	}
-	// 没有可立即 flush 的 unit——保留 tail（== 当前桶），等 scanOnce 按 silence 判定
+	// 现在的取舍：所有消息等 60s 整体识别，回执延迟一点；让 Kimi 自己处理"多商品
+	// + 图文交杂"的归一（详见 recognizeSystemPrompt 里"图文交杂多商品"那节）。
+	// disambig / dup_off_shelf 这两个用户回数字的场景仍立即 flush（上面已处理），
+	// 不被这条规则影响。
 }
 
 // scanOnce 扫描一遍所有桶，把已经"沉默够久"的桶 flush 出去。
@@ -440,6 +434,11 @@ func buildRecognizeInput(key autoReplyBucketKey, userCard string, snap []autoRep
 				}
 			case "image":
 				segs = append(segs, "[图片]")
+			case "video":
+				// 视频段直接跳过——app 不展示视频、dispatch 也不会上传视频到 OSS。
+				// 让 Kimi 完全感知不到时间线上有视频，避免它把 [视频] 占位符当作
+				// "用户发了什么" 误判。详见 skill/bot/recognition.md "视频处理"。
+				continue
 			case "at":
 				segs = append(segs, "[at]")
 			case "face":

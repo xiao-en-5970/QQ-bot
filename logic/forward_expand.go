@@ -213,9 +213,9 @@ func expandAndPushForward(msg *model.Message) {
 	zaplog.Logger.Infof("forward 展开 group=%d msgid=%d nodes=%d cost=%s",
 		msg.GroupID, msg.MessageID, len(expanded), time.Since(start))
 
-	// 注意：Push 是 O(1) 入桶，但每追加一条都会触发 splitBucketIntoUnits 重切。
-	// 默认 maxSize=20，若展开后超出，会被切成多个 unit 分别识别——对结果质量影响
-	// 不大（Kimi 会被调多次），且实际聊天记录里上架内容很少超过 20 条，先按这个走。
+	// 注意：Push 入桶后等 60s 沉默才整体送 Kimi 识别。若展开后超出 maxSize=20，
+	// Push 内的"桶满兜底"会先 flush 一半再继续——对结果质量影响不大（Kimi 会被调
+	// 多次），且实际聊天记录里上架内容很少超过 20 条，先按这个走。
 	for _, pseudo := range expanded {
 		autoReplyMgr.Push(pseudo.GroupID, pseudo.UserID, strings.TrimSpace(pseudo.Sender.Nickname), pseudo)
 	}

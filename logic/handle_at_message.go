@@ -221,6 +221,10 @@ func flattenMessageText(msg *model.Message) string {
 			}
 		case "image":
 			b.WriteString("[图片]")
+		case "video":
+			// 视频段不进入 app，bot 也不下载——彻底忽略，flatten 出来的文本不
+			// 留任何占位符。详见 buildRecognizeInput 同位置注释。
+			continue
 		case "face":
 			b.WriteString("[表情]")
 		case "reply":

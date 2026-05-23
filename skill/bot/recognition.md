@@ -22,8 +22,32 @@ bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则�
 - **per-(group, user) 滑动窗口**——每个 (群, 发送者) 各自一个独立桶
 - **沉默 60s 触发**（可配置，env `BOT_AUTO_REPLY_WINDOW_SECONDS`，默认 60）
 - 同桶内消息合并成一段上下文，整段交给 Kimi
-- Kimi 一次返回 N 个动作（可能 0、可能多个）
+- Kimi 一次返回 N 个动作（可能 0、可能多个），包含图文配对（image_message_ids）
 - 多个发送者交错时**严格按发送者分桶**，不混
+
+**早期"unit 切分立即 flush"机制已废弃**：以前桶里出现"图 图 图 文" 模式会立刻切出一个 unit 提前 flush，目的是让上架回执秒回。实际场景里用户在一次发布中常常图文交杂（图 图 图 视频 商品描述长文 图 价格），早期切分会在第一段文字处截止把后续价格切到下一个 unit 误识别，所以现在所有消息都攒在桶里等 60s 沉默后整体识别。`splitBucketIntoUnits` 函数已移除；只保留 `bucketHasMeaningfulText`——scanOnce 用它选走 Kimi（有文字）还是走 vision OCR（纯图）。
+
+回执延迟代价：上架后约 60s 才回执，但识别准确率显著提升，特别是这类复杂格式：
+
+```
+[图1] [图2] [图3] [视频]
+"AOC G2490VX显示器，24寸IPS屏，144Hz高刷..."
+[图4]
+"200 可小刀"
+```
+
+会正确识别为一个商品（title="AOC G2490VX显示器"、price=200、bargain=true），而不是切成两条 unit 漏掉价格。
+
+### 视频段处理
+
+QQ 用户在上架时常常附带 [视频]（实物演示），但：
+
+- app 端**不展示视频**——goods.images 只存图片 OSS URL
+- bot 也**不下载视频**——QQ 视频文件比图片大一个数量级，下载 + 上传 OSS 的工程成本对识别 / 展示的实际增益接近 0
+
+所以 bot 在 `buildRecognizeInput` 和 `flattenMessageText` 两个出口都直接 **`continue` 跳过 video 段**，不输出 `[视频]` 占位符。Kimi 完全感知不到时间线上有视频，prompt 也不再有"如何处理 [视频]"那条规则。
+
+将来若真要支持视频（比如截首帧当一张商品图），实现路径是独立的：在 dispatch 端加一段"video → ffmpeg 抽首帧 → 上传 OSS → 作为一张 image 加进 images 数组"——跟桶里 video 段是否输出占位符无关。
 
 ---
 
