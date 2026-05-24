@@ -444,7 +444,11 @@ func (c *Client) ListActiveGoods(ctx context.Context, userID uint, limit int) ([
 // SeekGoodMatch 「收××」检索单条（与 hfut BotSeekGoodMatch 对齐）。
 //
 // 字段含义：
-//   - SellerQQ 仅在 OrphanSeller=true（卖家是孤儿 QQ 旗下账号）时非空
+//   - SellerQQ 卖家的可联系 QQ 号；hfut 端 botContactQQForUser 按"卖家是 QQ 旗下号
+//     → 用 child.qq_number；卖家是 app 主账号且已绑 QQ → 用挂在其名下的 child
+//     的 qq_number；都没有 → 空"的规则填充。bot 端非空时直接给"加 QQ xxx"提示。
+//   - OrphanSeller 标识卖家是否孤儿 QQ 旗下账号（保留作为元信息，**不再**决定
+//     是否给 QQ —— 由 SellerQQ 非空判断）。
 //   - Images 是 hfut OSS 永久 URL；bot 命中后会用 send_group_forward_msg 把图片
 //     连同商品文字 + 联系方式打包成"聊天记录"发到群里（不直接发 QQ 临时图片，
 //     因 QQ 聊天记录会过期，OSS 持久）

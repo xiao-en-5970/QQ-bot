@@ -259,7 +259,7 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 		fmt.Sprintf("发起人 user_id: %d", userID))
 
 	return ackResult{
-		Text: fmt.Sprintf("已发求物品「%s」，等同学在 app 内联系你", title),
+		Text: fmt.Sprintf("已发布 求「%s」", title),
 		Kind: ackKindSuccess,
 	}
 }
@@ -397,10 +397,12 @@ func buildSeekForwardNodes(matches []hfut.SeekGoodMatch) []model.ForwardNodeIn {
 			shown++
 		}
 
-		// 联系方式节点
+		// 联系方式节点：hfut 端 botContactQQForUser 已经按"孤儿 / 主账号已绑 QQ"
+		// 两种情况都填充了 SellerQQ；只有完全没绑 QQ 的纯 app 主账号才会空，
+		// 这时才 fallback 到 app 内搜索。
 		var contact string
-		if g.OrphanSeller && strings.TrimSpace(g.SellerQQ) != "" {
-			contact = fmt.Sprintf("联系卖家：QQ %s", strings.TrimSpace(g.SellerQQ))
+		if qq := strings.TrimSpace(g.SellerQQ); qq != "" {
+			contact = fmt.Sprintf("联系卖家：QQ %s", qq)
 		} else {
 			contact = fmt.Sprintf("联系卖家：请在 app 内搜索「%s」查看完整信息和私聊", strings.TrimSpace(g.Title))
 		}
@@ -471,8 +473,10 @@ func buildSellerMatchForwardNodes(matches []hfut.SeekerMatch) []model.ForwardNod
 		if content := strings.TrimSpace(s.Content); content != "" {
 			fmt.Fprintf(&b, "\n描述：%s", truncateForLog(content, 200))
 		}
-		if s.OrphanSeeker && strings.TrimSpace(s.SeekerQQ) != "" {
-			fmt.Fprintf(&b, "\n联系求购者：QQ %s", strings.TrimSpace(s.SeekerQQ))
+		// 联系方式：同卖家匹配逻辑，hfut 已按 botContactQQForUser 填好 SeekerQQ；
+		// 任何能拿到 QQ 的求购者（孤儿 / 已绑 QQ 的主账号）都给 QQ 号。
+		if qq := strings.TrimSpace(s.SeekerQQ); qq != "" {
+			fmt.Fprintf(&b, "\n联系求购者：QQ %s", qq)
 		} else {
 			fmt.Fprintf(&b, "\n联系求购者：请在 app 内搜索「%s」查看完整信息和私聊",
 				strings.TrimSpace(s.Title))
@@ -607,18 +611,26 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 		}
 	}
 
-	// 成功回执——只展示用户能看懂的字段：分类 / 标题 / 价格 / 地点 / 配图数。
+	// 成功回执——只保留**用户最关心的核心字段**：分类 + 标题 + 价格 + 可选数量。
 	//
-	// 价格展示规则（与前端 tag 规则对齐，用户视角）：
-	//   - 二手 / 求物品：negotiable=true 显示"面议"
-	//   - 二手 / 求物品：price>0 显示价格；cat=2 时额外加"（有偿）"
-	//   - cat=2 + price=0 + 非面议：不展示价格（产品上前端也不展示）
+	// 设计原则：群里的 ack 越精简越好。地点 / 配图数 / 描述这些信息在 app 详情页
+	// 都有，群消息里堆这些反而像"bot 在告诉群友我能搞清楚什么"。统一文案形态：
+	//
+	//   - 二手有价：     已发布 二手「鞋架」 6 元
+	//   - 二手面议：     已发布 二手「鞋架」 面议
+	//   - 求物品有偿：   已发布 求「电瓶车」 50 元（有偿）
+	//   - 求物品无价：   已发布 求「电瓶车」
+	//   - 带数量：       已发布 二手「鞋架」 6 元 × 3
+	//
+	// 注意：QQ 上架的商品 / 求物品有自动有效期（二手 30 天、求物品 7 天，由 hfut
+	// service.BotPublishGood 自动设 deadline），但**不在群回执里提**——app 端
+	// deadline 标签会显示剩余时间，群里少一行减少干扰。
 	category := "二手"
 	if a.Category == 2 {
-		category = "求物品"
+		category = "求"
 	}
 	var b strings.Builder
-	b.WriteString("已上架 ")
+	b.WriteString("已发布 ")
 	b.WriteString(category)
 	b.WriteString("「")
 	b.WriteString(orPlaceholder(a.Title, "未命名"))
@@ -632,20 +644,9 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 			b.WriteString("（有偿）")
 		}
 	}
-	// 数量（用户明说"出 N 个" 才显示；默认 1 不显示）
 	if a.Stock > 1 {
 		fmt.Fprintf(&b, " × %d", a.Stock)
 	}
-	if a.Location != "" {
-		b.WriteString("，")
-		b.WriteString(a.Location)
-	}
-	if len(images) > 0 {
-		fmt.Fprintf(&b, "，配图 %d 张", len(images))
-	}
-	// 注意：QQ 上架的商品 / 求物品有自动有效期（二手 30 天、求物品 7 天，由 hfut
-	// service.BotPublishGood 自动设 deadline），但**不在群回执里提**——用户对这件事
-	// 不需要感知，app 端 deadline 标签会显示剩余时间，群里少一行减少干扰。
 	// 记录"最近一条"——给后续"不要了 / 不卖了"上下文化处理用
 	if resp != nil {
 		recentGoodMgr.Save(key, userID, resp.GoodID, strings.TrimSpace(a.Title), a.Category)
@@ -894,7 +895,7 @@ func dispatchPublishQuestion(ctx context.Context, key autoReplyBucketKey, userID
 		fmt.Sprintf("user_id: %d", userID))
 
 	return ackResult{
-		Text: fmt.Sprintf("已发求解答「%s」",
+		Text: fmt.Sprintf("已发布 问「%s」",
 			orPlaceholder(a.QuestionTitle, "未命名")),
 		Kind: ackKindSuccess,
 	}
