@@ -194,10 +194,10 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 		return ackResult{Kind: ackKindIgnore}
 	}
 
-	// 第 1 步：本校在售里检索匹配商品；命中即异步给求购者发卡片（不阻塞主流程）
-	if match := seekFirstMatch(ctx, key.GroupID, title); match != nil {
+	// 第 1 步：本校在售里检索匹配商品（最多 top 3）；命中即异步发卡片（不阻塞主流程）
+	if matches := seekTopMatches(ctx, key.GroupID, title, seekForwardMaxItems); len(matches) > 0 {
 		// goroutine 里发送，主流程继续；卡片自带 silentSuppressGroup 门
-		go sendSeekMatchForwardCard(key.GroupID, key.UserID, title, match)
+		go sendSeekMatchForwardCard(key.GroupID, key.UserID, title, matches)
 	}
 
 	// 第 2 步：上架为「求物品」（cat=2、price=0、非面议——前端隐藏价格、不挂"有偿"tag）
@@ -264,120 +264,221 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 	}
 }
 
-// seekFirstMatch 拉 SearchGoodsSeek 第一条命中；不命中返回 nil。
+// seekForwardMaxItems 合并转发卡片里最多列几个匹配项（商品 / 求购者都按此上限）。
+// 太多会让聊天记录卡片很长，群友点开后疲劳；3 个能覆盖绝大多数有用匹配。
+const seekForwardMaxItems = 3
+
+// seekTopMatches 拉 SearchGoodsSeek top N 命中；不命中或失败返回 nil。
 // 失败（含群没配学校）也返回 nil 让上游平滑降级；warn 不打日志干扰主路径。
-func seekFirstMatch(ctx context.Context, groupID int64, q string) *hfut.SeekGoodMatch {
-	list, err := global.Hfut.SearchGoodsSeek(ctx, groupID, q, 5)
+func seekTopMatches(ctx context.Context, groupID int64, q string, n int) []hfut.SeekGoodMatch {
+	if n <= 0 {
+		n = seekForwardMaxItems
+	}
+	list, err := global.Hfut.SearchGoodsSeek(ctx, groupID, q, n)
 	if err != nil {
 		if !errors.Is(err, hfut.ErrGroupNoSchool) {
 			zaplog.Logger.Warnf("autoReply seek 检索失败 group=%d q=%q: %v", groupID, q, err)
 		}
 		return nil
 	}
-	if len(list) == 0 {
-		return nil
+	if len(list) > n {
+		list = list[:n]
 	}
-	return &list[0]
+	return list
 }
 
-// sendSeekMatchForwardCard 把"匹配到的商品"打包成合并转发卡片发到求购群。
+// seekerTopMatches 同上，但反查的是"在求 X 的求购者"（goods_category=2 求物品）。
+// 用户上架商品后，bot 用本函数拿到"群里求该商品的最近 N 位"列表，发合并转发卡片
+// 提示卖家"以下人可能需要"。
+func seekerTopMatches(ctx context.Context, groupID int64, q string, n int) []hfut.SeekerMatch {
+	if n <= 0 {
+		n = seekForwardMaxItems
+	}
+	list, err := global.Hfut.SearchActiveSeeks(ctx, groupID, q, n)
+	if err != nil {
+		if !errors.Is(err, hfut.ErrGroupNoSchool) {
+			zaplog.Logger.Warnf("autoReply seeker 反查失败 group=%d q=%q: %v", groupID, q, err)
+		}
+		return nil
+	}
+	if len(list) > n {
+		list = list[:n]
+	}
+	return list
+}
+
+// sendSeekMatchForwardCard 把"匹配到的若干在售商品"打包成合并转发卡片发到求购群。
 //
 // 流程：
 //
-//  1. 先发普通 `@求购用户 你可能在找：xx商品名` 群消息——让用户能立刻看到 @ 提示
-//     而不必点开聊天记录卡片才知道是给自己的
-//  2. 再发合并转发包，里面 3 类节点按顺序：
-//     a) 文字节点：商品标题 / 价格 / 描述 / 地点 / 上架时间
-//     b) N 个图片节点：每张商品图一个节点（OSS 永久 URL，比 QQ 临时图片更稳）
-//     c) 末尾文字节点：联系方式（orphan 卖家给 QQ；非 orphan 提示 app 搜索）
+//  1. 先发普通 `@求购用户 你可能在找：xx商品名（找到 N 个匹配商品）` 让用户立刻
+//     看到 @ 提示，而不必点开聊天记录卡片才知道是给自己的
+//  2. 再发合并转发包：每个商品 3 段节点（文字 + 图 + 联系方式），最多 3 个商品
 //
-// SilentMode 静默语义：两次发送都走现成的 silentSuppressGroup 门——非运维群在
-// 静默模式下都不发，与其它群消息出口一致。
-//
-// 失败仅打 warn 不重试——seek 命中只是"锦上添花"提示，发不出不影响主流程的上架。
-func sendSeekMatchForwardCard(groupID int64, seekerQQ int64, seekTitle string, g *hfut.SeekGoodMatch) {
-	if g == nil {
+// SilentMode 静默：两次发送都走 silentSuppressGroup 门，与其它群消息出口一致。
+// 失败仅 warn 不重试——seek 命中只是锦上添花提示。
+func sendSeekMatchForwardCard(groupID, seekerQQ int64, seekTitle string, matches []hfut.SeekGoodMatch) {
+	if len(matches) == 0 {
 		return
 	}
 	httpClient := client_pool.NewClientPool()
 
-	// 第一条：@ 求购者，让他立刻看到提示
-	heading := fmt.Sprintf("你可能在找：%s", strings.TrimSpace(g.Title))
+	heading := fmt.Sprintf("你可能在找：%s", strings.TrimSpace(seekTitle))
+	if len(matches) > 1 {
+		heading += fmt.Sprintf("（找到 %d 个匹配商品）", len(matches))
+	}
 	if err := SendGroupAtText(httpClient, groupID, seekerQQ, heading); err != nil {
 		zaplog.Logger.Warnf("autoReply seek 命中提示发送失败 group=%d qq=%d: %v",
 			groupID, seekerQQ, err)
-		// 失败仍继续发卡片——@ 提示丢了，卡片至少给求购者价值
 	}
 
-	// 第二条：合并转发卡片
-	nodes := buildSeekForwardNodes(g, seekTitle)
+	nodes := buildSeekForwardNodes(matches)
 	if len(nodes) == 0 {
 		return
 	}
 	if err := SendGroupForwardMsg(httpClient, groupID, nodes); err != nil {
-		zaplog.Logger.Warnf("autoReply seek 合并转发卡片发送失败 group=%d good=%d: %v",
-			groupID, g.ID, err)
+		zaplog.Logger.Warnf("autoReply seek 合并转发卡片发送失败 group=%d items=%d: %v",
+			groupID, len(matches), err)
 	}
 }
 
-// buildSeekForwardNodes 构造合并转发卡片的节点序列。
+// buildSeekForwardNodes 构造"匹配商品列表"合并转发卡片的节点序列。
 //
-// 节点顺序固定：[文字 商品信息] → [图 1] [图 2] … [图 N] → [文字 联系方式]
-// 图最多展示 9 张（QQ 单条合并转发节点数本身没硬限，但群里展示太多滚不动；剩余的
-// 让用户进 app 看）。
-func buildSeekForwardNodes(g *hfut.SeekGoodMatch, seekTitle string) []model.ForwardNodeIn {
-	nodes := make([]model.ForwardNodeIn, 0, 2+len(g.Images))
-
-	// 节点 1：商品文字
-	var b strings.Builder
-	fmt.Fprintf(&b, "商品：%s", strings.TrimSpace(g.Title))
-
-	// 价格展示与"已上架"回执对齐
-	switch {
-	case g.Negotiable:
-		b.WriteString("\n价格：面议")
-	case g.Price > 0:
-		fmt.Fprintf(&b, "\n价格：%g 元", float64(g.Price)/100)
-	default:
-		b.WriteString("\n价格：免费")
+// 每商品 3 段节点：[文字 商品 i 信息] → [图 1..K] → [文字 联系方式 i]
+// 每商品最多 3 张图（节点总数封顶在 ~15，群友能从容滑过去）。
+func buildSeekForwardNodes(matches []hfut.SeekGoodMatch) []model.ForwardNodeIn {
+	const maxImagesPerItem = 3
+	if len(matches) == 0 {
+		return nil
 	}
-	if loc := strings.TrimSpace(g.Location); loc != "" {
-		fmt.Fprintf(&b, "\n地点：%s", loc)
-	}
-	if created, perr := parseHFUTTime(g.CreatedAt); perr == nil {
-		days := int(time.Since(created).Hours() / 24)
-		if days < 0 {
-			days = 0
+	nodes := make([]model.ForwardNodeIn, 0, len(matches)*5)
+
+	for i, g := range matches {
+		// 商品文字节点
+		var b strings.Builder
+		if len(matches) > 1 {
+			fmt.Fprintf(&b, "[%d] ", i+1)
 		}
-		fmt.Fprintf(&b, "\n上架：约 %d 天前", days)
-	}
-	if content := strings.TrimSpace(g.Content); content != "" {
-		fmt.Fprintf(&b, "\n描述：%s", truncateForLog(content, 200))
-	}
-	nodes = append(nodes, BuildForwardNodeText(b.String()))
-
-	// 节点 2..N+1：商品图
-	const maxImages = 9
-	for i, url := range g.Images {
-		if i >= maxImages {
-			break
+		fmt.Fprintf(&b, "商品：%s", strings.TrimSpace(g.Title))
+		switch {
+		case g.Negotiable:
+			b.WriteString("\n价格：面议")
+		case g.Price > 0:
+			fmt.Fprintf(&b, "\n价格：%g 元", float64(g.Price)/100)
+		default:
+			b.WriteString("\n价格:免费")
 		}
-		url = strings.TrimSpace(url)
-		if url == "" {
-			continue
+		if loc := strings.TrimSpace(g.Location); loc != "" {
+			fmt.Fprintf(&b, "\n地点：%s", loc)
 		}
-		nodes = append(nodes, BuildForwardNodeImage(url))
+		if created, perr := parseHFUTTime(g.CreatedAt); perr == nil {
+			days := int(time.Since(created).Hours() / 24)
+			if days < 0 {
+				days = 0
+			}
+			fmt.Fprintf(&b, "\n上架：约 %d 天前", days)
+		}
+		if content := strings.TrimSpace(g.Content); content != "" {
+			fmt.Fprintf(&b, "\n描述：%s", truncateForLog(content, 200))
+		}
+		nodes = append(nodes, BuildForwardNodeText(b.String()))
+
+		// 商品图节点（每商品最多 3 张）
+		shown := 0
+		for _, url := range g.Images {
+			if shown >= maxImagesPerItem {
+				break
+			}
+			url = strings.TrimSpace(url)
+			if url == "" {
+				continue
+			}
+			nodes = append(nodes, BuildForwardNodeImage(url))
+			shown++
+		}
+
+		// 联系方式节点
+		var contact string
+		if g.OrphanSeller && strings.TrimSpace(g.SellerQQ) != "" {
+			contact = fmt.Sprintf("联系卖家：QQ %s", strings.TrimSpace(g.SellerQQ))
+		} else {
+			contact = fmt.Sprintf("联系卖家：请在 app 内搜索「%s」查看完整信息和私聊", strings.TrimSpace(g.Title))
+		}
+		nodes = append(nodes, BuildForwardNodeText(contact))
 	}
 
-	// 节点末尾：联系方式
-	var contact string
-	if g.OrphanSeller && strings.TrimSpace(g.SellerQQ) != "" {
-		contact = fmt.Sprintf("联系卖家：QQ %s", strings.TrimSpace(g.SellerQQ))
-	} else {
-		contact = fmt.Sprintf("联系卖家：请在 app 内搜索「%s」查看完整信息和私聊", strings.TrimSpace(g.Title))
-	}
-	nodes = append(nodes, BuildForwardNodeText(contact))
+	return nodes
+}
 
+// sendSellerMatchForwardCard 把"匹配到的若干求购者"打包成合并转发卡片发到上架群。
+//
+// 跟 sendSeekMatchForwardCard 对称——卖家在群里"出 X" 上架成功后，bot 反查谁在
+// 求 X，命中即提示卖家"以下人可能需要"。
+func sendSellerMatchForwardCard(groupID, sellerQQ int64, sellTitle string, matches []hfut.SeekerMatch) {
+	if len(matches) == 0 {
+		return
+	}
+	httpClient := client_pool.NewClientPool()
+
+	heading := fmt.Sprintf("以下人可能需要：%s", strings.TrimSpace(sellTitle))
+	if len(matches) > 1 {
+		heading += fmt.Sprintf("（找到 %d 个匹配求购者）", len(matches))
+	}
+	if err := SendGroupAtText(httpClient, groupID, sellerQQ, heading); err != nil {
+		zaplog.Logger.Warnf("autoReply seller 命中提示发送失败 group=%d qq=%d: %v",
+			groupID, sellerQQ, err)
+	}
+
+	nodes := buildSellerMatchForwardNodes(matches)
+	if len(nodes) == 0 {
+		return
+	}
+	if err := SendGroupForwardMsg(httpClient, groupID, nodes); err != nil {
+		zaplog.Logger.Warnf("autoReply seller 合并转发卡片发送失败 group=%d items=%d: %v",
+			groupID, len(matches), err)
+	}
+}
+
+// buildSellerMatchForwardNodes 构造"匹配求购者列表"合并转发卡片的节点序列。
+//
+// 每个求购者一个**单文字节点**（求物品场景没有图、没有地点，比商品列表简单）。
+func buildSellerMatchForwardNodes(matches []hfut.SeekerMatch) []model.ForwardNodeIn {
+	if len(matches) == 0 {
+		return nil
+	}
+	nodes := make([]model.ForwardNodeIn, 0, len(matches))
+	for i, s := range matches {
+		var b strings.Builder
+		if len(matches) > 1 {
+			fmt.Fprintf(&b, "[%d] ", i+1)
+		}
+		fmt.Fprintf(&b, "求购：%s", strings.TrimSpace(s.Title))
+		switch {
+		case s.Negotiable:
+			b.WriteString("\n愿付：面议")
+		case s.Price > 0:
+			fmt.Fprintf(&b, "\n愿付：%g 元", float64(s.Price)/100)
+		default:
+			b.WriteString("\n愿付：仅求购无酬劳")
+		}
+		if created, perr := parseHFUTTime(s.CreatedAt); perr == nil {
+			days := int(time.Since(created).Hours() / 24)
+			if days < 0 {
+				days = 0
+			}
+			fmt.Fprintf(&b, "\n求购时间：约 %d 天前", days)
+		}
+		if content := strings.TrimSpace(s.Content); content != "" {
+			fmt.Fprintf(&b, "\n描述：%s", truncateForLog(content, 200))
+		}
+		if s.OrphanSeeker && strings.TrimSpace(s.SeekerQQ) != "" {
+			fmt.Fprintf(&b, "\n联系求购者：QQ %s", strings.TrimSpace(s.SeekerQQ))
+		} else {
+			fmt.Fprintf(&b, "\n联系求购者：请在 app 内搜索「%s」查看完整信息和私聊",
+				strings.TrimSpace(s.Title))
+		}
+		nodes = append(nodes, BuildForwardNodeText(b.String()))
+	}
 	return nodes
 }
 
@@ -548,6 +649,25 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 	// 记录"最近一条"——给后续"不要了 / 不卖了"上下文化处理用
 	if resp != nil {
 		recentGoodMgr.Save(key, userID, resp.GoodID, strings.TrimSpace(a.Title), a.Category)
+	}
+
+	// 上架成功后异步反查"谁在求 X" —— 仅二手卖出（cat=1）场景有意义；求物品 (cat=2)
+	// 反查求物品本身没意义（用户 A 求 X, B 也求 X, 互相不能满足对方）。
+	if a.Category == 1 {
+		sellTitle := strings.TrimSpace(a.Title)
+		if sellTitle != "" {
+			go func() {
+				// 独立 ctx，不被本次 dispatch ctx 影响（dispatchActionToHfut 的 ctx
+				// 一般是 processSnapshot 那层的 60s，反查 + 发卡片可能超出）
+				bgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				matches := seekerTopMatches(bgCtx, key.GroupID, sellTitle, seekForwardMaxItems)
+				if len(matches) == 0 {
+					return
+				}
+				sendSellerMatchForwardCard(key.GroupID, key.UserID, sellTitle, matches)
+			}()
+		}
 	}
 
 	// 上架成功后异步上报运维群（不阻塞主回执）

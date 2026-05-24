@@ -423,6 +423,23 @@ type SeekGoodMatch struct {
 	OrphanSeller bool     `json:"orphan_seller"`
 }
 
+// SeekerMatch 「出××」反查求购方的检索单条（与 hfut BotSeekerMatch 对齐）。
+//
+// 跟 SeekGoodMatch 对称——用户在群里"出 X"上架成功后，bot 用本结构反查谁在求 X，
+// 把求购者列表打包成"聊天记录"发到群里告诉卖家"以下人可能需要"。
+//
+// 求物品场景没有 Images / Location（用户求购一般不上传图），用 Price>0 表"愿付酬劳"。
+type SeekerMatch struct {
+	ID           uint   `json:"id"`
+	Title        string `json:"title"`
+	Content      string `json:"content"`
+	CreatedAt    string `json:"created_at"`
+	Price        int    `json:"price"`
+	Negotiable   bool   `json:"negotiable"`
+	SeekerQQ     string `json:"seeker_qq,omitempty"`
+	OrphanSeeker bool   `json:"orphan_seeker"`
+}
+
 // SearchGoodsSeek GET /api/v1/bot/groups/:group_id/goods/seek
 // LookupActiveGoodByMessageID 用 QQ message_id 反查"该用户名下、bot_message_ids 数组
 // 含此 ID 且仍在售"的商品；典型用例是用户 reply 自己之前的上架消息说"已出"。
@@ -442,6 +459,34 @@ func (c *Client) LookupActiveGoodByMessageID(ctx context.Context, userID uint, m
 		return nil, err
 	}
 	return out.Good, nil
+}
+
+// SearchActiveSeeks 反查"谁在求 X" —— GET /api/v1/bot/groups/:group_id/seekers/by-keyword
+//
+// 跟 SearchGoodsSeek 对称：用户在群里"出 X" 上架成功后调，拿到最多 N 条求物品记录
+// （goods_category=2、status=正常、good_status=在售）。命中即把列表打包成合并转发
+// 卡片发到群里。
+func (c *Client) SearchActiveSeeks(ctx context.Context, groupID int64, q string, limit int) ([]SeekerMatch, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 10 {
+		limit = 10
+	}
+	path := fmt.Sprintf("/api/v1/bot/groups/%d/seekers/by-keyword?q=%s&limit=%d",
+		groupID, url.QueryEscape(strings.TrimSpace(q)), limit)
+	var out struct {
+		List  []SeekerMatch `json:"list"`
+		Total int           `json:"total"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		var ce *ClientError
+		if errors.As(err, &ce) && ce.HTTPStatus == http.StatusNotFound {
+			return nil, ErrGroupNoSchool
+		}
+		return nil, err
+	}
+	return out.List, nil
 }
 
 func (c *Client) SearchGoodsSeek(ctx context.Context, groupID int64, q string, limit int) ([]SeekGoodMatch, error) {
