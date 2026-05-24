@@ -395,8 +395,11 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 	}
 
 	for i, a := range result.Actions {
-		zaplog.Logger.Infof("autoReply group=%d user=%d action[%d] type=%s confidence=%.2f reason=%q",
-			key.GroupID, key.UserID, i, a.Type, a.Confidence, a.Reason)
+		// 打全 title + image_message_ids + source_message_ids，方便事后复盘
+		// "Kimi 把哪几张图归到哪个商品"——尤其多商品 / 批量上架场景
+		zaplog.Logger.Infof("autoReply group=%d user=%d action[%d] type=%s confidence=%.2f title=%q price=%v images=%v sources=%v reason=%q",
+			key.GroupID, key.UserID, i, a.Type, a.Confidence,
+			a.Title, formatPrice(a.Price), a.ImageMessageIDs, a.SourceMessageIDs, a.Reason)
 		if a.Type == "none" {
 			continue
 		}

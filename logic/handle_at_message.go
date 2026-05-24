@@ -1,6 +1,7 @@
 package logic
 
 import (
+	"fmt"
 	"net/http"
 	"qq_bot/conf"
 	"qq_bot/global"
@@ -246,4 +247,12 @@ func truncateForLog(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// formatPrice 打日志友好：*float64 -> "nil" / "9.50"。
+func formatPrice(p *float64) string {
+	if p == nil {
+		return "nil"
+	}
+	return fmt.Sprintf("%.2f", *p)
 }
