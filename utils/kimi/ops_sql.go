@@ -172,6 +172,8 @@ func (k *Kimi) GenerateOpsSQL(ctx context.Context, question string) (string, err
 		Model:       model,
 		Messages:    buildOpsSQLMessages(cacheID, question),
 		Temperature: 0.2,
+		// 默认 1024 太小（一个稍复杂的 SQL + 注释就接近这个量了），统一 4096
+		MaxTokens: 4096,
 		ResponseFormat: &moonshot.ChatCompletionsRequestResponseFormat{
 			Type: moonshot.ChatCompletionsResponseFormatJSONObject,
 		},
@@ -233,6 +235,7 @@ func (k *Kimi) SummarizeOpsResult(ctx context.Context, question, sqlStr string, 
 			{Role: moonshot.RoleUser, Content: "结果上下文（JSON）：" + string(payload)},
 		},
 		Temperature: 0.4,
+		MaxTokens:   2048,
 	})
 	globalQuotaGate.RecordResult(err)
 	if err != nil {

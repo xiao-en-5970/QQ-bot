@@ -368,6 +368,32 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 	// 单独造一个 client 用来发回执，避免跟其它协程争用
 	httpClient := client_pool.NewClientPool()
 
+	// 限流：整个 snapshot 共用 1 个令牌——用户一次发 N 商品时，Kimi 会返回 N 个
+	// publish_good，但这是"同一次用户行为"，不应被算 N 次。dispatchActionToHfut
+	// 入参 skipRateLimit=true 跳过 per-action 计数。
+	//
+	// 触发限流时仅发一条 ack 给用户（不是 N 条），然后整批静默丢弃。
+	hasMutating := false
+	for _, a := range result.Actions {
+		if isMutatingAction(a.Type) {
+			hasMutating = true
+			break
+		}
+	}
+	if hasMutating {
+		if ok, retry := dispatchLimiter.Allow(key); !ok {
+			metrics.IncRateLimit()
+			zaplog.Logger.Warnf("autoReply 限流命中 group=%d user=%d snapshot_actions=%d retry=%s",
+				key.GroupID, key.UserID, len(result.Actions), retry)
+			text := fmt.Sprintf("太快，%d 秒后再发", int(retry.Seconds()))
+			res := ackResult{Text: text, Kind: ackKindAskUser}
+			if res.shouldEmit(conf.Cfg.Group.IsAutoReplyVerbose()) {
+				_ = SendGroupAtText(httpClient, key.GroupID, key.UserID, text)
+			}
+			return
+		}
+	}
+
 	for i, a := range result.Actions {
 		zaplog.Logger.Infof("autoReply group=%d user=%d action[%d] type=%s confidence=%.2f reason=%q",
 			key.GroupID, key.UserID, i, a.Type, a.Confidence, a.Reason)
@@ -380,7 +406,7 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 		//   - hfut 未配置 → P0 占位 ack（[识别测试] xxx 暂未真发布），等级当 success 处理
 		var res ackResult
 		if global.Hfut != nil {
-			res = dispatchActionToHfut(ctx, key, first.UserCard, snap, a)
+			res = dispatchActionToHfut(ctx, key, first.UserCard, snap, a, true /* skipRateLimit */)
 		} else {
 			// 占位 ack 在 verbose 下也只是给开发看，按 fail 处理——这样 normal 模式
 			// 跑没接 hfut 的 bot 会保持完全静默（也是合理的）

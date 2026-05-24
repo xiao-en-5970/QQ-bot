@@ -15,6 +15,7 @@ package logic
 import (
 	"context"
 	"errors"
+	"fmt"
 	"qq_bot/conf"
 	"qq_bot/global"
 	"qq_bot/model"
@@ -55,6 +56,19 @@ func (m *autoReplyManager) processImageOnlySnapshot(key autoReplyBucketKey, snap
 
 	httpClient := client_pool.NewClientPool()
 	verbose := conf.Cfg.Group.IsAutoReplyVerbose()
+
+	// 限流：整桶纯图共用 1 个令牌——这是"一次用户行为"，跟文本路径对齐。
+	// 触发限流时静默丢弃整桶（image-OCR 路径连发图都罕见，触发限流约等于刷屏）。
+	if ok, retry := dispatchLimiter.Allow(key); !ok {
+		metrics.IncRateLimit()
+		zaplog.Logger.Warnf("autoReply image-OCR 限流命中 group=%d user=%d images=%d retry=%s",
+			key.GroupID, key.UserID, imageCount, retry)
+		if verbose {
+			_ = SendGroupAtText(httpClient, key.GroupID, key.UserID,
+				fmt.Sprintf("太快，%d 秒后再发", int(retry.Seconds())))
+		}
+		return
+	}
 
 	// 给整体 vision OCR 留宽一点的超时——每张图最多 30s（visionHTTPTimeout）。
 	// 50 张图就是 25 分钟极端情况，但实际窗口里一般 1-3 张图就够。
@@ -142,10 +156,12 @@ func runVisionOnOneImage(
 		return "", ackKindIgnore
 	}
 
-	// 复用 dispatchActionToHfut：UpsertQQChild + 限流 + publish_good 落库 + dup 处理。
+	// 复用 dispatchActionToHfut：UpsertQQChild + publish_good 落库 + dup 处理。
+	// skipRateLimit=true：整桶已经在 processImageOnlySnapshot 入口统一取过限流令牌，
+	// 这里不再 per-image 计数（否则一桶 5 张图就会触发原 max=8 阈值）。
 	// snap 只放当前这一条 msg：让 imageURLsFromSnap 能用 image_message_ids 还原 URL，
 	// 也让 collectBotMessageIDs 能把 msg.MessageID 写到 goods.bot_message_ids（reply 反查需要）。
-	res := dispatchActionToHfut(ctx, key, userCard, []autoReplyMsg{msg}, *action)
+	res := dispatchActionToHfut(ctx, key, userCard, []autoReplyMsg{msg}, *action, true)
 	return res.Text, res.Kind
 }
 

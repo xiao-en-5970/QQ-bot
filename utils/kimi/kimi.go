@@ -216,7 +216,9 @@ func (k *Kimi) Chat(ctx context.Context, userID int64, text string) (string, err
 			Model:       chatModel,
 			Messages:    messages,
 			Temperature: 0.9,
-			Tools:       tools, // nil 也 ok，moonshot 接 omitempty
+			// 默认 1024 偶尔会被截断；聊天回复 2048 足够，又不会浪费 token 预算
+			MaxTokens: 2048,
+			Tools:     tools, // nil 也 ok，moonshot 接 omitempty
 		})
 		// 第一轮且命中"cache not found"类错误 → drop cache + 用 system message 重建
 		// messages 重试一次。后续 round 已经累积了 assistant / tool 消息，cache 失效
@@ -228,6 +230,7 @@ func (k *Kimi) Chat(ctx context.Context, userID int64, text string) (string, err
 				Model:       chatModel,
 				Messages:    messages,
 				Temperature: 0.9,
+				MaxTokens:   2048,
 				Tools:       tools,
 			})
 		}

@@ -79,17 +79,24 @@ func (r ackResult) shouldEmit(verbose bool) bool {
 // processSnapshot 那一层按 conf.Group.AutoReplyVerbosity 决定 ackResult 是否真发到群。
 //
 // 输入 snap 用于按 ImageMessageIDs 还原图片 URL 给 publish_good。
+//
+// skipRateLimit=true 表示调用方已经在 snapshot 入口处统一取过限流令牌，本次直接
+// 跳过 per-action 计数——避免"一个快照识别出 10 个商品时被算 10 次"。
 func dispatchActionToHfut(
 	ctx context.Context,
 	key autoReplyBucketKey,
 	userCard string,
 	snap []autoReplyMsg,
 	action kimi.RecognizeAction,
+	skipRateLimit bool,
 ) ackResult {
 	// 第 1 步：限流（P3.4）——仅对会"落库 / 改状态"的动作生效。
 	// 反问类（off_shelf 多候选 / close_question 多候选）落到这里其实只是"反问 + 等回应"，
 	// 也算一次 dispatch，但这一类不计数（避免用户被反问后立刻又触发限流）。
-	if isMutatingAction(action.Type) {
+	//
+	// 注意：skipRateLimit=true 时调用方（processSnapshot / processImageOnlySnapshot）
+	// 已经按"快照"取过一次令牌，整批 action 共用，这里不再重复计数。
+	if !skipRateLimit && isMutatingAction(action.Type) {
 		if ok, retry := dispatchLimiter.Allow(key); !ok {
 			metrics.IncRateLimit()
 			zaplog.Logger.Warnf("autoReply 限流命中 group=%d user=%d type=%s retry=%s",

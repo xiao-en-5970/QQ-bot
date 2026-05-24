@@ -160,15 +160,23 @@ func disambigChoiceFromText(text string) int {
 
 // dispatchRateWindow 滑动窗口大小——1 分钟。
 //
-// 业务节奏：用户正常发布 ≤ 1 次 / 分钟；> 3 次大概率是误识别 / 滥用 / 漏配的
-// 自动化脚本。窗口选 1min 既能抓住"短时刷屏"，又能让正常用户在跨分钟时不被
-// 误锁——典型场景：用户上架完一件想再上架第二件，这种隔个十几秒、每分钟 1~2
-// 次的节奏不会触发限流。
+// 业务节奏：用户毕业季 / 寒暑假末批量挂闲置很常见，一个人一两分钟内独立挂
+// 5-8 次都属于合理使用；典型异常是"机器人脚本反复刷"，那种通常 >10/min。
+// 窗口选 1min 既能抓住"短时刷屏"，又能让正常用户在跨分钟时不被误锁。
+//
+// 注意：一次 Kimi 识别快照里返回的 N 个 action（用户一次发了多商品）**共用
+// 1 个令牌**，不会被算 N 次（详见 processSnapshot / processImageOnlySnapshot 入口）。
 const dispatchRateWindow = 1 * time.Minute
 
 // dispatchRateMaxPerWindow 同 (group, user) 在 dispatchRateWindow 内允许的
-// "会落库"动作上限。第 N+1 次开始 dispatch 入口直接拒绝并返回 cooldown ack。
-const dispatchRateMaxPerWindow = 3
+// "会落库"快照次数上限。第 N+1 次开始 dispatch 入口直接拒绝并返回 cooldown ack。
+//
+// 实际场景：用户可能转发一个 15+ 商品的合并聊天记录（聊天记录展开是按节点 push
+// 到同一个桶后合成一个 snapshot，理论只占 1 个令牌；但极端情况——比如用户在
+// 同一分钟里连发几个聊天记录、或者跨群快速搬运——需要预留更宽的容量）。
+// 阈值 20 次/分钟相当于"每 3s 触发一次独立快照"，正常用户极难达到，但能彻底
+// 兜住合并消息 + 短时连发场景。机器人刷屏脚本通常远超这个数。
+const dispatchRateMaxPerWindow = 20
 
 // dispatchRateBucket 一个 (group, user) 的最近事件时间戳。
 //

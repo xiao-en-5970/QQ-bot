@@ -556,6 +556,11 @@ func (k *Kimi) RecognizeBusinessActions(ctx context.Context, input RecognizeInpu
 		Model:       model,
 		Messages:    messages,
 		Temperature: 0.2, // 低温度——识别任务要稳定，不要发散
+		// Moonshot SDK 默认 max_tokens=0 表示走服务端默认（1024），实测当用户一次
+		// 发了 10+ 个商品（每个商品 ~300 tokens JSON）时会被截断、返回 finish_reason=length，
+		// 上层 json.Unmarshal 报 unexpected end of JSON input。把上限拉到 8192，
+		// 覆盖到 20+ 商品的极端场景；moonshot-v1-auto / kimi-k2 都支持。
+		MaxTokens: 8192,
 		ResponseFormat: &moonshot.ChatCompletionsRequestResponseFormat{
 			Type: moonshot.ChatCompletionsResponseFormatJSONObject,
 		},
@@ -582,6 +587,12 @@ func (k *Kimi) RecognizeBusinessActions(ctx context.Context, input RecognizeInpu
 	msg, err := resp.GetMessage()
 	if err != nil {
 		return nil, fmt.Errorf("从 moonshot 响应取 message 失败: %w", err)
+	}
+
+	// finish_reason=length 表示输出被 max_tokens 截断；JSON 一定不完整，直接报错
+	// 走 ack=fail（或 normal 静默），避免下游 json.Unmarshal 报 unexpected EOF 的劣质日志。
+	if len(resp.Choices) > 0 && resp.Choices[0].FinishReason == moonshot.FinishReasonLength {
+		return nil, fmt.Errorf("识别结果被 max_tokens=%d 截断（finish_reason=length），用户内容过多，请考虑分批发送", req.MaxTokens)
 	}
 
 	var result RecognizeResult
