@@ -132,6 +132,21 @@ const opsSQLSystemPrompt = `你是一名"只读 SQL 助手"，根据运维同事
 
 输出严格 JSON（无 markdown 围栏、无解释）：{"sql": "<纯 SELECT 语句>"}`
 
+// buildOpsSQLMessages 按 cache 命中与否构造 ops_sql 调用的 messages 序列。
+func buildOpsSQLMessages(cacheID, question string) []*moonshot.ChatCompletionsMessage {
+	userContent := "运维问题：" + question
+	if cacheID != "" {
+		return []*moonshot.ChatCompletionsMessage{
+			cacheReferenceMessage(cacheID),
+			{Role: moonshot.RoleUser, Content: userContent},
+		}
+	}
+	return []*moonshot.ChatCompletionsMessage{
+		{Role: moonshot.RoleSystem, Content: opsSQLSystemPrompt},
+		{Role: moonshot.RoleUser, Content: userContent},
+	}
+}
+
 // opsSummarySystemPrompt 第二轮总结时的提示词——把结果换成中文一段话。
 const opsSummarySystemPrompt = `你是运维助手，刚刚执行了一段只读 SQL，结果以 JSON 的形式提供给你。
 请把结果用一两句中文概括给运维同事看，必要时点出关键数字 / 趋势 / 异常。
@@ -151,17 +166,21 @@ func (k *Kimi) GenerateOpsSQL(ctx context.Context, question string) (string, err
 		return "", ErrQuotaCooling
 	}
 	model := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.RecognizeModel)
-	resp, err := k.cli.Chat().Completions(ctx, &moonshot.ChatCompletionsRequest{
-		Model: model,
-		Messages: []*moonshot.ChatCompletionsMessage{
-			{Role: moonshot.RoleSystem, Content: opsSQLSystemPrompt},
-			{Role: moonshot.RoleUser, Content: "运维问题：" + question},
-		},
+	// 优先用 Context Cache 省 system prompt token；失效 / 创建失败时 fallback 老路
+	cacheID := k.opsSQLCache.loadID()
+	req := &moonshot.ChatCompletionsRequest{
+		Model:       model,
+		Messages:    buildOpsSQLMessages(cacheID, question),
 		Temperature: 0.2,
 		ResponseFormat: &moonshot.ChatCompletionsRequestResponseFormat{
 			Type: moonshot.ChatCompletionsResponseFormatJSONObject,
 		},
-	})
+	}
+	resp, err := k.cli.Chat().Completions(ctx, req)
+	if err != nil && cacheID != "" && k.opsSQLCache.dropIfMissing(err, k.cli) {
+		req.Messages = buildOpsSQLMessages("", question)
+		resp, err = k.cli.Chat().Completions(ctx, req)
+	}
 	globalQuotaGate.RecordResult(err)
 	if err != nil {
 		return "", fmt.Errorf("调用 moonshot completions 失败: %w", err)

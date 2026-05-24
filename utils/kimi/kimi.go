@@ -38,17 +38,24 @@ type QAS struct {
 
 // AsMessages 把当前 buffer 拼成 moonshot 标准 messages 序列。
 //
-// 顺序：[system, user1, assistant1, user2, assistant2, ..., userNew]
-func (qas *QAS) AsMessages(systemPrompt, newText string) []*moonshot.ChatCompletionsMessage {
+// 顺序：[system 或 cache_ref, user1, assistant1, user2, assistant2, ..., userNew]
+//
+// cacheID != "" 时首位用 cache 引用替代 system message——Moonshot 会从缓存恢复
+// system prompt 内容，等价但省 token。cacheID == "" 走原样 system message。
+func (qas *QAS) AsMessages(systemPrompt, newText, cacheID string) []*moonshot.ChatCompletionsMessage {
 	qas.mu.Lock()
 	defer qas.mu.Unlock()
 
 	cap := int64(len(qas.qaSlice))
 	out := make([]*moonshot.ChatCompletionsMessage, 0, cap*2+2)
-	out = append(out, &moonshot.ChatCompletionsMessage{
-		Role:    moonshot.RoleSystem,
-		Content: systemPrompt,
-	})
+	if cacheID != "" {
+		out = append(out, cacheReferenceMessage(cacheID))
+	} else {
+		out = append(out, &moonshot.ChatCompletionsMessage{
+			Role:    moonshot.RoleSystem,
+			Content: systemPrompt,
+		})
+	}
 	// 从环形 buffer 的"最旧"位置开始按时间顺序读
 	start := (qas.index + 1) % cap
 	for i := int64(0); i < cap; i++ {
@@ -88,6 +95,11 @@ type Kimi struct {
 	users  map[int64]*QAS
 	prompt string
 	ctxLen int64
+	// Moonshot Context Cache 状态——不同调用路径各自一份，互不影响。
+	// 详见 context_cache.go。
+	recognizeCache cacheEntry
+	opsSQLCache    cacheEntry
+	chatCache      cacheEntry // 仅当 chat 的 system prompt 足够长（≥1000 chars）时启用
 }
 
 // InitKimi 按 conf.Cfg.Gpt.APIKey 初始化。
@@ -120,12 +132,34 @@ func InitKimi() (*Kimi, error) {
 
 	zaplog.Logger.Infof("Kimi 聊天能力已启用 (chat_model=%s, recognize_model=%s, max_context_size=%d, prompt长度=%d, quota_cooldown=%ds)",
 		conf.Cfg.Gpt.Model, conf.Cfg.Gpt.RecognizeModel, ctxLen, len(prompt), conf.Cfg.Gpt.QuotaCooldownSeconds)
-	return &Kimi{
+	k := &Kimi{
 		cli:    cli,
 		users:  make(map[int64]*QAS),
 		prompt: prompt,
 		ctxLen: ctxLen,
-	}, nil
+	}
+	// 各 cache 的 prompt / family 在这里固化，运行期不再改：
+	//   - recognize 用 RecognizeModel（默认 kimi-k2 系列）
+	//   - ops_sql 也走 RecognizeModel（同 family）
+	//   - chat 用 conf.Cfg.Gpt.Model（默认 moonshot-v1-auto），且仅当 prompt 足够长时启用
+	k.recognizeCache = cacheEntry{
+		name:         "qq-bot-recognize-system-prompt-v1",
+		modelFamily:  kimiK2Family,
+		systemPrompt: recognizeSystemPrompt,
+	}
+	k.opsSQLCache = cacheEntry{
+		name:         "qq-bot-ops-sql-system-prompt-v1",
+		modelFamily:  kimiK2Family,
+		systemPrompt: opsSQLSystemPrompt,
+	}
+	if len(prompt) >= chatPromptCacheThreshold {
+		k.chatCache = cacheEntry{
+			name:         "qq-bot-chat-system-prompt-v1",
+			modelFamily:  moonshot.ModelFamilyMoonshotV1,
+			systemPrompt: prompt,
+		}
+	}
+	return k, nil
 }
 
 // getOrCreate 拿/建某个 user 的 QAS。
@@ -165,7 +199,8 @@ func (k *Kimi) Chat(ctx context.Context, userID int64, text string) (string, err
 		return "", fmt.Errorf("kimi quota 冷却中（剩余 %s），请稍后再试", remain.Truncate(time.Second))
 	}
 	qas := k.getOrCreate(userID)
-	messages := qas.AsMessages(k.prompt, text)
+	chatCacheID := k.chatCache.loadID()
+	messages := qas.AsMessages(k.prompt, text, chatCacheID)
 	tools := toolSpecs()
 
 	// 单次 Chat 里允许的工具往返轮次上限：防 Kimi 反复调工具不出最终答案。
@@ -185,6 +220,19 @@ func (k *Kimi) Chat(ctx context.Context, userID int64, text string) (string, err
 			Temperature: 0.9,
 			Tools:       tools, // nil 也 ok，moonshot 接 omitempty
 		})
+		// 第一轮且命中"cache not found"类错误 → drop cache + 用 system message 重建
+		// messages 重试一次。后续 round 已经累积了 assistant / tool 消息，cache 失效
+		// 不会在中间轮触发，所以只兜底第一轮。
+		if err != nil && round == 0 && chatCacheID != "" && k.chatCache.dropIfMissing(err, k.cli) {
+			messages = qas.AsMessages(k.prompt, text, "")
+			chatCacheID = ""
+			resp, err = k.cli.Chat().Completions(ctx, &moonshot.ChatCompletionsRequest{
+				Model:       chatModel,
+				Messages:    messages,
+				Temperature: 0.9,
+				Tools:       tools,
+			})
+		}
 		globalQuotaGate.RecordResult(err)
 		if err != nil {
 			return "", fmt.Errorf("调用 moonshot completions 失败: %w", err)

@@ -61,6 +61,13 @@ func main() {
 		zaplog.Logger.Errorf("Kimi 初始化失败: %v，CmdDefault 将回退到打印菜单", err)
 		global.Kimi = nil
 	}
+	// 异步给 Moonshot 注册各路径的 Context Cache（recognize / ops_sql / chat）——
+	// 后续请求只塞 cache 引用，省下每次的 system message 输入 token 费。
+	// 创建失败自动 fallback 到老路（每次发完整 system prompt），不阻塞 bot 启动。
+	// 详见 utils/kimi/context_cache.go。
+	if global.Kimi != nil {
+		global.Kimi.StartContextCachePrime(ctx)
+	}
 
 	// 初始化 hfut 客户端（auto_reply 路径会用）。
 	// URL 或 JWT secret 任一缺失都不初始化——auto_reply 检测到 global.Hfut == nil 时回退到
