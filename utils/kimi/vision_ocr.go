@@ -9,6 +9,12 @@
 //   - 本函数把**单张图片 URL** 通过 OpenAI 风格 vision content array 传给视觉模型，
 //     让模型直接看图，每张图独立产出一条 action
 //
+// 关键：**不直接把 NapCat URL 给 Moonshot**——NapCat 的临时图片 URL 形如
+// https://multimedia.nt.qq.com.cn/download?...&rkey=...，rkey 是 QQ 客户端
+// 鉴权 token，只对发起请求的客户端 IP / 设备有效。Moonshot 服务端从它自己的
+// 机房 IP 去拉时 QQ 会拒绝（403/404）。所以本函数 **先 bot 端下载图片 → base64
+// 编码 → 以 data: URI 形式传给 Moonshot**，绕开跨服务器鉴权问题。
+//
 // 不复用现有 *moonshot.Client：SDK 的 ChatCompletionsMessage.Content 只支持 string，
 // vision API 要求 content 是数组（type=image_url + type=text）。直接绕过 SDK 走
 // 原生 http.Client 发请求；只为这一个端点，代码量也少。
@@ -18,6 +24,7 @@ package kimi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +32,7 @@ import (
 	"net/http"
 	"qq_bot/conf"
 	zaplog "qq_bot/utils/zap"
+	"strings"
 	"time"
 )
 
@@ -35,6 +43,13 @@ const moonshotVisionEndpoint = "https://api.moonshot.cn/v1/chat/completions"
 //
 // 视觉调用比纯文本慢一些；30s 留出余量但避免 fail-fast 缺失。
 const visionHTTPTimeout = 30 * time.Second
+
+// visionDownloadTimeout 下载 NapCat 图片到本地的超时。
+const visionDownloadTimeout = 15 * time.Second
+
+// visionMaxImageBytes Moonshot vision API 单张图上限（实测 ~10MB）；超大图我们
+// 直接拒绝，避免 base64 后超过 10MB 触发 Moonshot 413。
+const visionMaxImageBytes = 8 * 1024 * 1024
 
 // visionUserPrompt 告诉模型"看这张图、抽出商品信息按既定 JSON 输出"。
 //
@@ -127,13 +142,22 @@ func (k *Kimi) RecognizeFromImage(ctx context.Context, imageURL string, messageI
 		return nil, ErrQuotaCooling
 	}
 
+	// 第 0 步：把 NapCat 鉴权 URL 下载到本地转 base64 data URI。
+	// Moonshot 服务端拉不到 NapCat 临时 URL（rkey 只对发起客户端有效）；
+	// 下载完成后用 data:image/...;base64,... 形式给 Moonshot，绕开跨服务器鉴权。
+	dataURI, err := downloadImageAsDataURI(ctx, imageURL)
+	if err != nil {
+		return nil, fmt.Errorf("vision download image: %w", err)
+	}
+	zaplog.Logger.Infof("vision OCR msg=%d 图片已下载 size=%dKB", messageID, len(dataURI)*3/4/1024)
+
 	reqBody := visionRequest{
 		Model: conf.Cfg.Gpt.VisionModel,
 		Messages: []visionMessage{
 			{
 				Role: "user",
 				Content: []visionContent{
-					{Type: "image_url", ImageURL: &visionImageURLDetail{URL: imageURL}},
+					{Type: "image_url", ImageURL: &visionImageURLDetail{URL: dataURI}},
 					{Type: "text", Text: visionUserPrompt},
 				},
 			},
@@ -186,7 +210,7 @@ func (k *Kimi) RecognizeFromImage(ctx context.Context, imageURL string, messageI
 	if content == "" {
 		return nil, errors.New("vision 返回 content 为空")
 	}
-	zaplog.Logger.Debugf("vision raw content msg=%d: %s", messageID, truncateRaw(content, 200))
+	zaplog.Logger.Infof("vision raw content msg=%d: %s", messageID, truncateRaw(content, 400))
 
 	var action RecognizeAction
 	if err := json.Unmarshal([]byte(content), &action); err != nil {
@@ -207,4 +231,74 @@ func truncateRaw(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// downloadImageAsDataURI 把 NapCat 临时 URL 的图片下载下来，转成
+// data:image/<mime>;base64,<...> 形式返回。Moonshot vision API 接受 data: URI
+// 的 image_url，不需要再去自己拉远程图片。
+//
+// 兼容 NapCat URL 里可能出现的 &amp; HTML 实体（个别版本 raw 字段写到 segments
+// 里时没做反转义；正常 segments.url 不会出现，但加一道兜底）。
+func downloadImageAsDataURI(parent context.Context, srcURL string) (string, error) {
+	srcURL = strings.ReplaceAll(srcURL, "&amp;", "&")
+
+	dlCtx, cancel := context.WithTimeout(parent, visionDownloadTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, srcURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("new req: %w", err)
+	}
+	// NapCat 给的腾讯多媒体域名对 UA 不挑，但带一个常规 UA 更安全
+	req.Header.Set("User-Agent", "qq-bot-vision/1.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("do: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return "", fmt.Errorf("HTTP %d 下载图片失败 url=%s", resp.StatusCode, truncateRaw(srcURL, 120))
+	}
+
+	// 限流读取，防止超大图把内存撑爆。
+	lr := io.LimitReader(resp.Body, visionMaxImageBytes+1)
+	raw, err := io.ReadAll(lr)
+	if err != nil {
+		return "", fmt.Errorf("read body: %w", err)
+	}
+	if len(raw) > visionMaxImageBytes {
+		return "", fmt.Errorf("图片过大（>%dMB），跳过", visionMaxImageBytes/1024/1024)
+	}
+	if len(raw) == 0 {
+		return "", errors.New("图片下载到 0 字节")
+	}
+
+	mime := detectImageMIME(raw)
+	if mime == "" {
+		mime = "image/jpeg" // 默认 jpeg，QQ 图片绝大多数是 jpeg
+	}
+	encoded := base64.StdEncoding.EncodeToString(raw)
+	return "data:" + mime + ";base64," + encoded, nil
+}
+
+// detectImageMIME 用 magic bytes 判 MIME；只覆盖 QQ 群里能见到的主流格式。
+//
+// Moonshot vision 文档支持 image/jpeg、image/png、image/gif、image/webp 这几种。
+func detectImageMIME(raw []byte) string {
+	if len(raw) < 4 {
+		return ""
+	}
+	switch {
+	case bytes.HasPrefix(raw, []byte{0xFF, 0xD8, 0xFF}):
+		return "image/jpeg"
+	case bytes.HasPrefix(raw, []byte{0x89, 0x50, 0x4E, 0x47}):
+		return "image/png"
+	case bytes.HasPrefix(raw, []byte("GIF8")):
+		return "image/gif"
+	case len(raw) >= 12 && bytes.Equal(raw[0:4], []byte("RIFF")) && bytes.Equal(raw[8:12], []byte("WEBP")):
+		return "image/webp"
+	case bytes.HasPrefix(raw, []byte{0x42, 0x4D}):
+		return "image/bmp"
+	}
+	return ""
 }
