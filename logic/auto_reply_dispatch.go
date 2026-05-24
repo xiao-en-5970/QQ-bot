@@ -36,6 +36,7 @@ import (
 	zaplog "qq_bot/utils/zap"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -618,8 +619,19 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 			}
 		}
 		zaplog.Logger.Errorf("autoReply hfut PublishGood 失败 user=%d title=%q: %v", userID, a.Title, err)
+		// 批量上架失败时 title 是 N 个商品名串联（可能上百字），群里贴这种长串体验差——
+		// 单独走简短文案。
+		failText := fmt.Sprintf("「%s」未发出，稍后再试", orPlaceholder(a.Title, "这条"))
+		if a.IsBatch {
+			itemCount := batchItemCount(a.Title)
+			if itemCount > 1 {
+				failText = fmt.Sprintf("批量上架 %d 件商品未发出，稍后再试", itemCount)
+			} else {
+				failText = "批量上架未发出，稍后再试"
+			}
+		}
 		return ackResult{
-			Text: fmt.Sprintf("「%s」未发出，稍后再试", orPlaceholder(a.Title, "这条")),
+			Text: failText,
 			Kind: ackKindFail,
 		}
 	}
@@ -780,12 +792,23 @@ const mirrorImageDownloadTimeout = 15 * time.Second
 // 真实群聊照片普遍 < 2MB，10MB 已经是非常富余的兜底。
 const mirrorImageMaxBytes = 10 * 1024 * 1024
 
+// mirrorImagesConcurrency 单次批量转存并发度。
+//
+// 经验值：4 并发。bot 的瓶颈通常是腾讯多媒体 CDN 下载（rkey 鉴权 + 限速），
+// 单连接 1-3s/张；并发 4 能压到 14 张总 ~5-8s，对比串行 14 张 30-50s 是质变。
+// 再大并发对 hfut OSS 反压不友好（hfut 端单连接 token / 节流敏感）。
+const mirrorImagesConcurrency = 4
+
 // mirrorImagesToHfut 把 NapCat 临时 URL 列表转成 hfut OSS 永久 URL 列表。
 //
-// 流程（每张图独立走一遍）：
+// 流程（每张图独立 worker）：
 //  1. http GET NapCat URL（带超时 + 大小上限）→ 拿到二进制
 //  2. 从 URL path / Content-Type 推断扩展名（jpg/png/...）
 //  3. 调 hfut.UploadImage 上传 → 拿到永久 URL
+//
+// **并发**：固定 mirrorImagesConcurrency 个 worker 拉队列；保留原顺序（返回的 OSS
+// URL 跟输入 napcatURLs 一一对应——hash 失败/超时位 nil 不出现在结果里，仅按索引
+// 跳过那张图）。商品图顺序对前端展示语义很重要（第一张是封面），不能乱。
 //
 // 失败处理：**任何一张图的任何一步出错，仅 log + skip 这张**，继续下一张——
 // 商品少一张图比让"商品创建失败"友好得多。最终返回成功上传的 URL 列表。
@@ -799,15 +822,52 @@ func mirrorImagesToHfut(ctx context.Context, userID uint, napcatURLs []string) [
 		zaplog.Logger.Warnf("mirrorImagesToHfut: global.Hfut nil，回退到原 NapCat URL")
 		return napcatURLs
 	}
-	out := make([]string, 0, len(napcatURLs))
-	for i, srcURL := range napcatURLs {
-		hfutURL, err := mirrorOneImage(ctx, userID, srcURL)
-		if err != nil {
+
+	type result struct {
+		idx int
+		url string
+		err error
+	}
+	jobs := make(chan int, len(napcatURLs))
+	results := make(chan result, len(napcatURLs))
+
+	conc := mirrorImagesConcurrency
+	if conc > len(napcatURLs) {
+		conc = len(napcatURLs)
+	}
+	var wg sync.WaitGroup
+	for w := 0; w < conc; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				hfutURL, err := mirrorOneImage(ctx, userID, napcatURLs[idx])
+				results <- result{idx: idx, url: hfutURL, err: err}
+			}
+		}()
+	}
+	for i := range napcatURLs {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+
+	// 按 idx 还原顺序——商品第一张图当封面，顺序不能乱
+	ordered := make([]string, len(napcatURLs))
+	for r := range results {
+		if r.err != nil {
 			zaplog.Logger.Warnf("mirrorImagesToHfut 第 %d/%d 张转存失败 user=%d url=%q: %v",
-				i+1, len(napcatURLs), userID, truncateForLog(srcURL, 100), err)
+				r.idx+1, len(napcatURLs), userID, truncateForLog(napcatURLs[r.idx], 100), r.err)
 			continue
 		}
-		out = append(out, hfutURL)
+		ordered[r.idx] = r.url
+	}
+	out := make([]string, 0, len(napcatURLs))
+	for _, u := range ordered {
+		if u != "" {
+			out = append(out, u)
+		}
 	}
 	if len(out) < len(napcatURLs) {
 		zaplog.Logger.Infof("mirrorImagesToHfut 部分失败 user=%d: %d/%d 成功",
