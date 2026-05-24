@@ -22,9 +22,13 @@
 package logic
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"qq_bot/conf"
 	"qq_bot/model"
-	"qq_bot/service"
 	zaplog "qq_bot/utils/zap"
 	"strings"
 	"time"
@@ -97,11 +101,14 @@ func expandForwardInGroupMsgWithDepth(client *http.Client, msg *model.Message, d
 
 		fwd, parseErr := model.AsForwardData(seg.Data)
 		if parseErr != nil || fwd.ID == "" {
-			zaplog.Logger.Warnf("forward segment 解析失败 group=%d msgid=%d: %v", msg.GroupID, msg.MessageID, parseErr)
+			zaplog.Logger.Warnf("forward segment 解析失败 group=%d msgid=%d raw=%+v err=%v",
+				msg.GroupID, msg.MessageID, seg.Data, parseErr)
 			// 解析失败：退化成原 segment 保留（让外层 flatten 走默认 [forward]）
 			nonForwardBuf = append(nonForwardBuf, seg)
 			continue
 		}
+		zaplog.Logger.Infof("forward fetch 开始 group=%d msgid=%d fid=%s",
+			msg.GroupID, msg.MessageID, fwd.ID)
 
 		nodes, fetchErr := fetchForwardNodes(client, fwd.ID)
 		if fetchErr != nil {
@@ -111,11 +118,15 @@ func expandForwardInGroupMsgWithDepth(client *http.Client, msg *model.Message, d
 			continue
 		}
 		if len(nodes) == 0 {
-			zaplog.Logger.Debugf("get_forward_msg 返回空 group=%d msgid=%d fid=%s",
+			// NapCat 这条 fid 拿不到子消息（可能是 forward 资源已过期 / NapCat 没缓存）
+			// → 保留原 segment 让外层 flatten 走 [合并转发(未展开)] 占位，不丢消息
+			zaplog.Logger.Warnf("get_forward_msg 返回 0 子消息（fid 可能过期或 NapCat 未缓存）group=%d msgid=%d fid=%s",
 				msg.GroupID, msg.MessageID, fwd.ID)
-			// 空聊天记录：丢掉这条 forward 段（不留占位，避免把"空"误传给 Kimi）
+			nonForwardBuf = append(nonForwardBuf, seg)
 			continue
 		}
+		zaplog.Logger.Infof("forward fetch 成功 group=%d msgid=%d fid=%s nodes=%d",
+			msg.GroupID, msg.MessageID, fwd.ID, len(nodes))
 
 		// 先把当前消息里 forward 之前的非 forward 段刷出去
 		flushNonForward()
@@ -180,13 +191,88 @@ func composePseudoMsgID(outerID int64, idx int) int64 {
 //
 // 这里有 1 次额外的 HTTP 调用——业界正常的合并转发拉取，正常 1-2s 完成。
 // 调用方应放在 goroutine 里执行以免阻塞 wsclient。
+//
+// 失败 / 0 子消息时返回值：err != nil 或 len(nodes)==0；调用方负责降级。
+// 返回 0 个子消息的常见原因：
+//   - forward 资源 ID 已过期（QQ 端清理 / 跨群转发 token 失效）
+//   - NapCat 版本响应字段名不同（messages / nodes / content）→ 见 fetchForwardNodesRaw
+//   - 用户转发的不是"聊天记录"而是"单条转发" → 内容缺失
+//
+// 实现细节：绕过 service.BaseService，直接发请求 + 读 raw body，能 dump 完整响应
+// 并兼容 messages / nodes / content 三种字段名（不同 NapCat 版本响应字段不一致）。
 func fetchForwardNodes(client *http.Client, forwardID string) ([]model.ForwardNode, error) {
-	req := &model.GetForwardMsgReq{MessageID: forwardID, ID: forwardID}
-	err, resp := service.GetForwardMsg(client, req)
+	return fetchForwardNodesRaw(client, forwardID)
+}
+
+// fetchForwardNodesRaw 显式手写请求 + 解析，方便排查。
+func fetchForwardNodesRaw(client *http.Client, forwardID string) ([]model.ForwardNode, error) {
+	body, _ := json.Marshal(map[string]string{
+		"message_id": forwardID,
+		"id":         forwardID,
+	})
+	url := conf.Cfg.Server.Address + "get_forward_msg"
+	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("forward fetch: build req: %w", err)
 	}
-	return resp.Data.Messages, nil
+	httpReq.Header.Set("Content-Type", "application/json")
+	if tok := conf.Cfg.Server.AccessToken; tok != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+tok)
+	}
+	httpResp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("forward fetch: %w", err)
+	}
+	defer httpResp.Body.Close()
+	raw, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("forward fetch: read body: %w", err)
+	}
+	// raw body 截断 800 字 dump 出来——线上聊天记录场景频次很低，info 级别诊断够用
+	zaplog.Logger.Infof("get_forward_msg raw fid=%s http=%d body=%s",
+		forwardID, httpResp.StatusCode, truncateRawForward(string(raw), 800))
+
+	// 同时支持 NapCat 三种可能的字段名：messages / nodes / content
+	var envelope struct {
+		Status  string          `json:"status"`
+		RetCode int             `json:"retcode"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, fmt.Errorf("forward fetch: parse envelope: %w", err)
+	}
+	if envelope.RetCode != 0 && envelope.Status != "ok" {
+		return nil, fmt.Errorf("forward fetch: napcat status=%s retcode=%d msg=%s",
+			envelope.Status, envelope.RetCode, envelope.Message)
+	}
+	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return nil, nil
+	}
+	var inner struct {
+		Messages []model.ForwardNode `json:"messages"`
+		Nodes    []model.ForwardNode `json:"nodes"`
+		Content  []model.ForwardNode `json:"content"`
+	}
+	if err := json.Unmarshal(envelope.Data, &inner); err != nil {
+		return nil, fmt.Errorf("forward fetch: parse data: %w", err)
+	}
+	switch {
+	case len(inner.Messages) > 0:
+		return inner.Messages, nil
+	case len(inner.Nodes) > 0:
+		return inner.Nodes, nil
+	case len(inner.Content) > 0:
+		return inner.Content, nil
+	}
+	return nil, nil
+}
+
+func truncateRawForward(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "...(truncated)"
 }
 
 // expandAndPushForward 接管"消息含 forward 段"的群消息，异步展开后按时间顺序
