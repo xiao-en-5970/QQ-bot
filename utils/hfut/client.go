@@ -230,10 +230,10 @@ type PublishGoodReq struct {
 	GroupID    int64    `json:"group_id,omitempty"` // bot 上架时来源 QQ 群号；<=0 不填
 	Title      string   `json:"title"`
 	Content    string   `json:"content"`
-	Category   int16    `json:"category"`   // 1=二手 2=有偿求助/AA活动
-	Negotiable bool     `json:"negotiable"` // true 时 Price 被忽略，前端展示"面议"
-	Bargain    bool     `json:"bargain"`    // 可刀
-	Price      int      `json:"price"`      // 单位：分
+	Category   int16    `json:"category"`        // 1=二手 2=有偿求助/AA活动
+	Negotiable bool     `json:"negotiable"`      // true 时 Price 被忽略，前端展示"面议"
+	Bargain    bool     `json:"bargain"`         // 可刀
+	Price      int      `json:"price"`           // 单位：分
 	Stock      int      `json:"stock,omitempty"` // 库存数量；<=0 时后端按 1 兜底
 	Location   string   `json:"location"`
 	Images     []string `json:"images"`
@@ -242,6 +242,10 @@ type PublishGoodReq struct {
 	// 用户 reply 自己之前的上架消息说"已出"时，bot 用 reply.id 调
 	// LookupActiveGoodByMessageID 直接定位 good，跳过模糊匹配 + 消歧反问。
 	BotMessageIDs []int64 `json:"bot_message_ids,omitempty"`
+	// IsBatch=true 表示这是"合并聊天记录批量上架"的商品：title 是多个商品名用
+	// 逗号串联、价格统一面议、所有图片都属于这个商品。hfut 落到 goods.is_batch
+	// 字段，app 前端按此显示"批量上架"tag。
+	IsBatch bool `json:"is_batch,omitempty"`
 	// Force=true 时后端跳过 title 重复检查。给 bot 反问"重复上架"路径用——
 	// 用户在群里选择"1 重复上架"后，bot 用 Force=true 重发原 request 强制创建。
 	Force bool `json:"force,omitempty"`

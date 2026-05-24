@@ -588,6 +588,7 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 		Location:      strings.TrimSpace(a.Location),
 		Images:        images,
 		BotMessageIDs: botMsgIDs,
+		IsBatch:       a.IsBatch, // 合并聊天记录的"批量上架"商品；hfut 落 goods.is_batch
 	}
 	resp, err := global.Hfut.PublishGood(ctx, pubReq)
 	if err != nil {
@@ -637,22 +638,35 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 		category = "求"
 	}
 	var b strings.Builder
-	b.WriteString("已发布 ")
-	b.WriteString(category)
-	b.WriteString("「")
-	b.WriteString(orPlaceholder(a.Title, "未命名"))
-	b.WriteString("」")
-	switch {
-	case negotiable:
-		b.WriteString(" 面议")
-	case priceCents > 0:
-		fmt.Fprintf(&b, " %g 元", float64(priceCents)/100)
-		if a.Category == 2 {
-			b.WriteString("（有偿）")
+	if a.IsBatch {
+		// 批量上架：直接 "批量上架 N 件商品：a，b，c。"——不带"已发布"前缀、
+		// 不带"二手"/"求"分类、不带价格（统一面议）。商品名列表直接用 title
+		// 原始内容（Kimi 已经按中文逗号串联）。
+		itemCount := batchItemCount(a.Title)
+		title := strings.TrimSpace(a.Title)
+		if itemCount > 1 {
+			fmt.Fprintf(&b, "批量上架 %d 件商品：%s。", itemCount, title)
+		} else {
+			fmt.Fprintf(&b, "批量上架商品：%s。", orPlaceholder(title, "未命名"))
 		}
-	}
-	if a.Stock > 1 {
-		fmt.Fprintf(&b, " × %d", a.Stock)
+	} else {
+		b.WriteString("已发布 ")
+		b.WriteString(category)
+		b.WriteString("「")
+		b.WriteString(orPlaceholder(a.Title, "未命名"))
+		b.WriteString("」")
+		switch {
+		case negotiable:
+			b.WriteString(" 面议")
+		case priceCents > 0:
+			fmt.Fprintf(&b, " %g 元", float64(priceCents)/100)
+			if a.Category == 2 {
+				b.WriteString("（有偿）")
+			}
+		}
+		if a.Stock > 1 {
+			fmt.Fprintf(&b, " × %d", a.Stock)
+		}
 	}
 	// 记录"最近一条"——给后续"不要了 / 不卖了"上下文化处理用
 	if resp != nil {

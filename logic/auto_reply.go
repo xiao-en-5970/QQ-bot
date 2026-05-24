@@ -600,6 +600,26 @@ func orPlaceholder(s, fallback string) string {
 	return s
 }
 
+// batchItemCount 数批量上架 title 里逗号串联的商品个数。支持中文逗号 "，"、
+// 半角逗号 ","、顿号 "、"，三种都常见。空 title 返回 0。
+func batchItemCount(title string) int {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return 0
+	}
+	// 把所有分隔符替换成 "," 再 split
+	t = strings.ReplaceAll(t, "，", ",")
+	t = strings.ReplaceAll(t, "、", ",")
+	parts := strings.Split(t, ",")
+	count := 0
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" {
+			count++
+		}
+	}
+	return count
+}
+
 // StartAutoReplyScanner 启动后台扫描协程。
 //
 // 调用约定：必须由 main 在 `go StartAutoReplyScanner(ctx)` 之前调用 global.Wg.Add(1)，
