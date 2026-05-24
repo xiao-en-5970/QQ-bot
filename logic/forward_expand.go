@@ -311,20 +311,31 @@ func expandAndPushForward(msg *model.Message) {
 	zaplog.Logger.Infof("forward 展开 group=%d msgid=%d nodes=%d cost=%s",
 		msg.GroupID, msg.MessageID, len(expanded), time.Since(start))
 
-	// Push 入桶后等 60s 沉默才整体送 Kimi 识别。每条伪消息走 PushFromForward 让它带
-	// "来自聊天记录"标记 + node 的原始时间，Kimi prompt 会按"每条独立判定"识别每个
-	// 商品，避免把整段聊天记录归到一个上架（详见 recognizeSystemPrompt "聊天记录
-	// 展开"那节）。
-	for _, pseudo := range expanded {
+	// Push 入桶后等 60s 沉默才整体送 Kimi 识别。整段聊天记录用 PushBatchFromForward
+	// **一次过**——避免被桶的 maxSize=20 上限切碎（30 节点的聊天记录如果逐条 push
+	// 会在第 20 条触发 size flush、剩下 10 条变成第二个 snapshot，那样 Kimi 就会把
+	// 一段聊天记录识别成两个独立的批量上架，违背语义）。详见 recognizeSystemPrompt
+	// "聊天记录展开"节 + skill/bot/recognition.md "批量上架"段。
+	pseudoMsgs := make([]*model.Message, 0, len(expanded))
+	originTimes := make([]time.Time, 0, len(expanded))
+	var firstGroupID, firstUserID int64
+	var firstNickname string
+	for i, pseudo := range expanded {
+		if i == 0 {
+			firstGroupID = pseudo.GroupID
+			firstUserID = pseudo.UserID
+			firstNickname = strings.TrimSpace(pseudo.Sender.Nickname)
+		}
 		// node 的 Time 是 unix 秒；零值 / 负数都视为"没拿到"，让 Push 内部 fallback
 		// 到入桶时间。
 		var originTime time.Time
 		if pseudo.Time > 0 {
 			originTime = time.Unix(pseudo.Time, 0)
 		}
-		autoReplyMgr.PushFromForward(pseudo.GroupID, pseudo.UserID,
-			strings.TrimSpace(pseudo.Sender.Nickname), pseudo, originTime)
+		pseudoMsgs = append(pseudoMsgs, pseudo)
+		originTimes = append(originTimes, originTime)
 	}
+	autoReplyMgr.PushBatchFromForward(firstGroupID, firstUserID, firstNickname, pseudoMsgs, originTimes)
 }
 
 // newForwardFetchClient 给 forward fetch 用的临时 client。

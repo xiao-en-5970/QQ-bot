@@ -99,7 +99,7 @@ var autoReplyMgr = &autoReplyManager{
 //
 // 不会主动 flush——flush 由扫描协程按时间/容量触发。
 func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *model.Message) {
-	m.pushInternal(groupID, userID, userCard, msg, time.Time{}, false)
+	m.pushInternal(groupID, userID, userCard, msg, time.Time{}, false, false)
 }
 
 // PushFromForward 跟 Push 同义，但额外标记"这条来自聊天记录展开后的子消息"，
@@ -109,11 +109,33 @@ func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *mod
 // 用本函数 push 进同一桶。Kimi prompt 据此判定"每条独立判定 / 不合并"。
 //
 // originTime 为零值时 fallback 到 time.Now()（节点没带 time 字段时用得上）。
+//
+// **注意**：本函数会**触发** maxSize flush——只适合"零散补 push"场景。如果是
+// 一次性 push 一整段聊天记录（>20 节点），用 PushBatchFromForward 整批一次过，
+// 避免被 20 条上限切成多个 snapshot。
 func (m *autoReplyManager) PushFromForward(groupID, userID int64, userCard string, msg *model.Message, originTime time.Time) {
-	m.pushInternal(groupID, userID, userCard, msg, originTime, true)
+	m.pushInternal(groupID, userID, userCard, msg, originTime, true, false)
 }
 
-func (m *autoReplyManager) pushInternal(groupID, userID int64, userCard string, msg *model.Message, originTime time.Time, fromForward bool) {
+// PushBatchFromForward 一次性 push 一整段聊天记录展开后的所有伪消息。
+//
+// 跟"循环里调 PushFromForward"的关键差别：本函数**整批跳过 maxSize flush 检查**，
+// 哪怕一次塞进 50 条也不会在第 20 条时被切碎。整段聊天记录就该作为一个 snapshot
+// 整体送给 Kimi 识别成"批量上架"商品（IsBatch=true）。
+//
+// 入参 msgs 和 originTimes 长度必须相等且一一对应；任一为 0 长度直接 noop。
+func (m *autoReplyManager) PushBatchFromForward(groupID, userID int64, userCard string,
+	msgs []*model.Message, originTimes []time.Time) {
+	if len(msgs) == 0 || len(msgs) != len(originTimes) {
+		return
+	}
+	for i, msg := range msgs {
+		m.pushInternal(groupID, userID, userCard, msg, originTimes[i], true, true /* suppressSizeFlush */)
+	}
+}
+
+func (m *autoReplyManager) pushInternal(groupID, userID int64, userCard string,
+	msg *model.Message, originTime time.Time, fromForward bool, suppressSizeFlush bool) {
 	if msg == nil {
 		return
 	}
@@ -169,11 +191,15 @@ func (m *autoReplyManager) pushInternal(groupID, userID int64, userCard string, 
 
 	// 桶超大时主动 flush——异常情况下用户狂发 30 条不停顿，不能一直攒。
 	// 注意：Flush 内部需要拿不到 mu，这里释放后再调（用 goroutine 异步）。
+	//
+	// suppressSizeFlush=true 时跳过：PushBatchFromForward 一次性把一段聊天记录
+	// 展开的所有节点 push 进桶（可能 >20 条），整段应作为单一 snapshot 给 Kimi
+	// 识别成批量上架，不能在中间被切碎。等 silence 60s 后由 scanner 自然 flush。
 	maxSize := conf.Cfg.Group.AutoReplyMaxWindowSize
 	if maxSize <= 0 {
 		maxSize = 20
 	}
-	shouldFlush := len(b.Msgs) >= maxSize
+	shouldFlush := !suppressSizeFlush && len(b.Msgs) >= maxSize
 
 	// P3.2：消歧的"立刻 flush"路径。
 	//
@@ -618,6 +644,39 @@ func batchItemCount(title string) int {
 		}
 	}
 	return count
+}
+
+// normalizeBatchContent 把批量上架的 Kimi description 强制规范成"每件商品独占一行、
+// 行尾中文句号"的格式——避免 Kimi 偶尔用顿号 / 中文逗号 / 段不换行等不一致输出。
+//
+// 拆分策略：按 "\n"、中文句号"。"、英文句号"."、顿号"、" 分段。每段 trim 后非空就
+// 当成一件商品；行尾统一补"。"。行之间用 "\n" 连接。
+func normalizeBatchContent(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	// 统一各种分隔符 → "\n"
+	repl := strings.NewReplacer(
+		"。\n", "\n",
+		"。", "\n",
+		"\r\n", "\n",
+		"\r", "\n",
+		"、", "\n",
+	)
+	t := repl.Replace(s)
+	parts := strings.Split(t, "\n")
+	lines := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		// 去掉行尾可能残留的中英文逗号 / 句号 / 顿号
+		p = strings.TrimRight(p, "，,、.。 ")
+		if p == "" {
+			continue
+		}
+		lines = append(lines, p+"。")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // StartAutoReplyScanner 启动后台扫描协程。

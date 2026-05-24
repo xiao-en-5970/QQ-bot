@@ -573,13 +573,18 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 	// 用户 reply 任一条都能反查到 good 直接下架（详见 LookupActiveGoodByMessageID）。
 	botMsgIDs := collectBotMessageIDs(snap, a)
 
+	// 批量上架：content 强制按"每件一行、行尾句号、行间换行"标准化；普通上架走原样
+	content := strings.TrimSpace(a.Description)
+	if a.IsBatch {
+		content = normalizeBatchContent(content)
+	}
 	// resp 里有 GoodID 用于"最近一条"快速查找；不在群里展示给用户——
 	// 用户在 app "我的发布" 列表能看到刚发的，没必要再给个数字增加阅读负担。
 	pubReq := hfut.PublishGoodReq{
 		UserID:        userID,
 		GroupID:       groupID,
 		Title:         strings.TrimSpace(a.Title),
-		Content:       strings.TrimSpace(a.Description),
+		Content:       content,
 		Category:      int16(a.Category),
 		Negotiable:    negotiable,
 		Bargain:       a.Bargain,
