@@ -46,12 +46,12 @@ import (
 //  1. 防止外部修改影响内存
 //  2. 我们关心的就是 user_id / time / segments / 群名片，纯数据结构更好序列化给 LLM
 type autoReplyMsg struct {
-	MessageID  int64
-	UserID     int64
-	UserCard   string // 用户展示名——**只**取 sender.nickname（QQ 全局昵称），不允许群名片污染
-	Time       time.Time
-	Segments   []model.MessageSegment // 原 segments（含 image url、at、text 等）
-	FlatText   string                 // 扁平化的文本表示（含 [图片] 等占位符），方便 log / 喂 LLM
+	MessageID int64
+	UserID    int64
+	UserCard  string // 用户展示名——**只**取 sender.nickname（QQ 全局昵称），不允许群名片污染
+	Time      time.Time
+	Segments  []model.MessageSegment // 原 segments（含 image url、at、text 等）
+	FlatText  string                 // 扁平化的文本表示（含 [图片] 等占位符），方便 log / 喂 LLM
 }
 
 // autoReplyBucket 单个 (group, user) 的滑动窗口。
@@ -421,6 +421,7 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 // 图片段：用 "[图片]" 占位符——具体 URL 暂不交给模型，避免 URL 干扰判断（模型只需要知道
 //
 //	"这条消息有图"以及它的 message_id）；
+//
 // 其它段（at / face / reply 等）：用 "[type:X]" 占位符。
 func buildRecognizeInput(key autoReplyBucketKey, userCard string, snap []autoReplyMsg) kimi.RecognizeInput {
 	msgs := make([]kimi.RecognizeMsg, 0, len(snap))

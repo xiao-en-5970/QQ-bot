@@ -3,23 +3,39 @@
 // 核心思想：长 system prompt 注册成命名缓存，后续请求只塞 cache 引用 + reset_ttl
 // 续命；命中按"缓存 token 单价"计费（≈ 普通输入的 1/5）。
 //
-// 当前接入的 3 个 cache：
+// ## Moonshot 现状（2026-05 实测）
 //
-//   - recognize  业务动作识别（recognize.go）—— prompt ≈ 5000+ tokens
-//   - ops_sql    运维群"自然语言转 SQL"（ops_sql.go）—— prompt ≈ 3000 tokens
-//   - chat       @bot 聊天（kimi.go）—— prompt 长度由用户配 GPT_SYSTEM_PROMPT
-//                决定；conf.applyDefaults 兜底很短（~50 tokens），低于 Moonshot 缓存
-//                最低门槛会创建失败——见 chatPromptCacheThreshold 注释
+// Moonshot 有两套缓存机制，按 model family 分流：
 //
-// 不接入的：
+// | Model Family   | 缓存机制                                    | 显式 /v1/caching API |
+// |----------------|---------------------------------------------|----------------------|
+// | `moonshot-v1`  | 显式：创建 cache_id → messages[0] 引用      | ✅ 支持                |
+// | `kimi-k2.*`    | **自动前缀缓存**（服务端检测 prompt 前缀）  | ❌ 调用即报 invalid    |
+//
+// 调 kimi-k2 family 的显式 /v1/caching 会直接报 `model family is invalid`。
+//
+// ## 本项目的接入策略
+//
+// 默认 RecognizeModel = `kimi-k2-0905-preview`、Model = `moonshot-v1-auto`：
+//
+//   - **recognize / ops_sql**（kimi-k2 系列）：**不**主动 prime；每次请求继续把
+//     完整 system message 放在 messages[0]，Moonshot 服务端**自动前缀缓存**会识别
+//     连续请求的相同前缀并命中。除了保证"每次请求 prompt 字节级完全一致"之外，
+//     bot 端无需任何动作。
+//   - **chat**（moonshot-v1-auto）：用显式 /v1/caching prime 一次 → 后续请求用
+//     cache 引用替代 system。仅当用户自定义 GPT_SYSTEM_PROMPT 长度 ≥ 1000 chars
+//     时启用（短 prompt 进 Moonshot 会拒绝）。
+//
+// ## 不接入的
 //
 //   - ops_summary  运维结果总结 prompt < 200 tokens（达不到缓存最低门槛）
-//   - vision OCR   单图调用、prompt 短（~500 tokens），且图片本身才是大头
+//   - vision OCR   单图调用、prompt 短（~500 tokens），且图片本身才是 token 大头
 //
-// 设计要点：
-//   - 启动时**异步并行** prime 各 cache（不阻塞 InitKimi 返回）
+// ## 设计要点
+//
+//   - 启动时**异步并行** prime 启用的 cache（不阻塞 InitKimi 返回）
 //   - 创建失败 / cache 失效 → 该路径自动 fallback 到原"每次发 system prompt"模式
-//     业务零影响；后台会重建缓存
+//     业务零影响；失效后后台会重建缓存
 //   - 每次请求 reset_ttl 续命；进程一直跑就一直续，过期不需要主动操心
 //   - 进程重启会丢内存 cache_id 但创建一次后用很多次本身就回本，不持久化
 
@@ -163,18 +179,11 @@ func cacheReferenceMessage(id string) *moonshot.ChatCompletionsMessage {
 	}
 }
 
-// =============================================================================
-// 三份缓存实例的 model family 选择
+// StartContextCachePrime 启动时调一次（非阻塞）：异步并行 prime 所有启用的 cache。
 //
-// Moonshot Context Cache 按 model family 缓存——同一 family 内不同 variant
-// （8k/32k/128k）共用同一份缓存。无需匹配具体 variant。
-// =============================================================================
-
-// kimiK2Family Kimi K2 系列（kimi-k2-0905-preview 等）所属的 family 字符串。
-// SDK 没有 enum 常量，由我们按 Moonshot 文档命名传字符串。
-const kimiK2Family moonshot.ChatCompletionsModelFamily = "kimi-k2"
-
-// StartContextCachePrime 启动时调一次（非阻塞）：异步并行 prime 所有 cache。
+// recognize / ops_sql 的 cacheEntry 字段为空（systemPrompt == ""），prime 内部
+// 直接 return；只有 chat（且 prompt 足够长）会真正调 Moonshot 创建缓存。详见
+// 文件头部"接入策略"段。
 //
 // 调用方应在 InitKimi 之后调。失败仅 warn，业务零影响（各调用路径自动 fallback
 // 到每次发完整 system prompt）。
@@ -182,9 +191,15 @@ func (k *Kimi) StartContextCachePrime(parent context.Context) {
 	if k == nil {
 		return
 	}
+	// recognize / ops_sql 默认 model 是 kimi-k2-* —— Moonshot 显式 /v1/caching API
+	// 不支持 K2 family，但 K2 服务端有"自动前缀缓存"：连续请求 prompt 前缀完全一致
+	// 即自动命中缓存价。bot 端只需保证每次请求 system message 字节级相同即可。
+	// 详见文件头部"接入策略"段。
+	zaplog.Logger.Infof("context cache: recognize / ops_sql 走 kimi-k2 自动前缀缓存（每次请求 system 不变即可命中）")
+
+	// chatCache 只在 prompt 足够长时才被 InitKimi 填字段——空字段 systemPrompt
+	// 的 prime 内部会直接 return 不调 Moonshot，所以无脑 start 也安全。
 	k.recognizeCache.startPrimeOnce(parent, k.cli)
 	k.opsSQLCache.startPrimeOnce(parent, k.cli)
-	// chatCache 只在 prompt 足够长时才被 InitKimi 填字段——空字段时 prime 内部会
-	// 直接 return 不调 Moonshot，所以这里无脑 start 也安全
 	k.chatCache.startPrimeOnce(parent, k.cli)
 }

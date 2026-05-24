@@ -92,7 +92,10 @@ func run(ctx context.Context) {
 			if global.Hfut == nil {
 				continue
 			}
-			pollCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			// 15s 给跨公网 + 偶发 TLS 重连留余量；本调用非关键路径（force-poll 失败
+			// 只是晚一会响应 admin 立即同步信号，30s ticker 会自然兜底），失败 log
+			// 也是 debug 级别不刷错误日志。
+			pollCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			at, err := global.Hfut.GetQQSyncForceAt(pollCtx)
 			cancel()
 			if err != nil {

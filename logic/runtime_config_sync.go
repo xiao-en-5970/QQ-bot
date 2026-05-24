@@ -18,6 +18,7 @@ package logic
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"qq_bot/conf"
 	"qq_bot/global"
 	zaplog "qq_bot/utils/zap"
@@ -81,8 +82,13 @@ func pullOnce(parent context.Context) {
 	}
 	overlay := parseOverlay(raw)
 	conf.SetRuntimeOverlay(overlay)
-	zaplog.Logger.Infof("runtime config sync: 已应用 keys=%d  whitelist=%v ops=%v silent=%v",
-		len(raw), overlay.AutoReplyWhitelist, overlay.OpsGroupIDs, overlay.SilentMode)
+	// silent 字段是 *bool，%v 会打印指针地址；这里显式格式化成 true/false/unset 让日志可读
+	silentStr := "unset"
+	if overlay.SilentMode != nil {
+		silentStr = fmt.Sprintf("%v", *overlay.SilentMode)
+	}
+	zaplog.Logger.Infof("runtime config sync: 已应用 keys=%d  whitelist=%v ops=%v silent=%s",
+		len(raw), overlay.AutoReplyWhitelist, overlay.OpsGroupIDs, silentStr)
 }
 
 // parseOverlay 把 hfut 返回的 key→json.RawMessage 解码为 RuntimeOverlay。

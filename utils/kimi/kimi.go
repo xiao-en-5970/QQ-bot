@@ -138,20 +138,18 @@ func InitKimi() (*Kimi, error) {
 		prompt: prompt,
 		ctxLen: ctxLen,
 	}
-	// 各 cache 的 prompt / family 在这里固化，运行期不再改：
-	//   - recognize 用 RecognizeModel（默认 kimi-k2 系列）
-	//   - ops_sql 也走 RecognizeModel（同 family）
-	//   - chat 用 conf.Cfg.Gpt.Model（默认 moonshot-v1-auto），且仅当 prompt 足够长时启用
-	k.recognizeCache = cacheEntry{
-		name:         "qq-bot-recognize-system-prompt-v1",
-		modelFamily:  kimiK2Family,
-		systemPrompt: recognizeSystemPrompt,
-	}
-	k.opsSQLCache = cacheEntry{
-		name:         "qq-bot-ops-sql-system-prompt-v1",
-		modelFamily:  kimiK2Family,
-		systemPrompt: opsSQLSystemPrompt,
-	}
+	// Context Cache 接入策略（按 Moonshot 实际能力分流）：
+	//
+	// 1) recognize / ops_sql：默认用 kimi-k2-0905-preview。Moonshot 的显式 /v1/caching
+	//    **不支持** K2 family（调用即报 `model family is invalid`），但 K2 走**自动
+	//    前缀缓存**：服务端自动检测连续请求的 prompt 前缀，命中即按缓存价计费。
+	//    我们每次请求都把 system message 完全相同地放在第一位 —— 自动前缀缓存
+	//    会命中，无需任何额外代码。所以这两个 cacheEntry **不主动 prime**，
+	//    走老路传 system，让 Moonshot 自动 cache。
+	//
+	// 2) chat：默认用 moonshot-v1-auto，属 moonshot-v1 family —— 显式 /v1/caching
+	//    支持。且仅当 prompt 长度 ≥ chatPromptCacheThreshold 时才启用（避免 Moonshot
+	//    拒绝太短的 prompt）。默认配的 ~50 字傲娇科学家不会进入。
 	if len(prompt) >= chatPromptCacheThreshold {
 		k.chatCache = cacheEntry{
 			name:         "qq-bot-chat-system-prompt-v1",

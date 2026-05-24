@@ -924,7 +924,7 @@ func dispatchPublishAnswer(ctx context.Context, groupID int64, userID uint, a ki
 	// resp.ArticleID 不外露——回答在 app 提问详情页就能看到。
 	_, err = global.Hfut.PublishArticle(ctx, hfut.PublishArticleReq{
 		UserID:   userID,
-		Type:     3, // 回答
+		Type:     3,            // 回答
 		Title:    parent.Title, // 回答的 title 用父提问的，方便列表展示
 		Content:  strings.TrimSpace(a.AnswerContent),
 		ParentID: &pid,

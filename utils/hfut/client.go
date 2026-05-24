@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -85,9 +86,46 @@ func NewClient(baseURL, jwtSecret, serviceName string) (*Client, error) {
 		jwtSecret:   []byte(jwtSecret),
 		serviceName: serviceName,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second, // bot 路径的所有调用都该几秒内回，30s 足够兜底
+			Timeout:   30 * time.Second, // bot 路径的所有调用都该几秒内回，30s 足够兜底
+			Transport: newHfutTransport(),
 		},
 	}, nil
+}
+
+// newHfutTransport 给 hfut.Client 用的 http.Transport，针对"长跑、跨公网、间歇调用"
+// 场景调优过：
+//
+//   - **MaxIdleConnsPerHost=16**：默认 http.DefaultTransport 只给 2，bot 同时并发
+//     的上架 / 识别 / poll / 检索调用一旦超过 2，就会反复建立新 TCP（每次 TLS 握手
+//     ~200-1000ms），引起莫名其妙的"几秒延迟"。
+//
+//   - **IdleConnTimeout=45s**：默认 90s，但跨 NAT / Cloudflare / 中间防火墙时，对方
+//     的 TCP 表项通常在 60s 左右过期。bot 这边以为连接还活着继续发包，对方早就清
+//     掉了连接表 —— 包石沉大海，直到客户端 ctx 超时（这是真实日志里 "context
+//     deadline exceeded" 的常见原因）。设成 45s 比对端表项早过期，让 bot 主动关掉
+//     久不用的连接、下次重新握手。
+//
+//   - **ForceAttemptHTTP2=true**：HTTP/2 在单条 TCP 上多路复用所有请求，对 bot 这种
+//     并发量小、连接复用率要求高的场景特别合适。
+//
+//   - **DialContext 5s + KeepAlive 30s**：建连快速失败，避免请求级 ctx 被 dial 吃掉
+//     大半。
+//
+//   - **TLSHandshakeTimeout=5s**：握手卡死不至于拖到整个 30s 兜底超时。
+func newHfutTransport() *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       45 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     true,
+	}
 }
 
 // signToken 临时签一个 60s 有效期的 service JWT。
