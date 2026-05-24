@@ -164,17 +164,20 @@ func pseudoMessageFromNode(forwarder *model.Message, node *model.ForwardNode, id
 	out := *forwarder
 	out.Message = segs
 
-	// node.time 是内层消息的发送时间，更接近"用户那一刻发布"的语义；
-	// 但 autoReplyMgr.Push 内部用 time.Now() 做入桶时间，msg.Time 只在日志里展示，
-	// 所以这里如果有内层 time 就用，没有就保留外层时间。
-	if node.Data.Time > 0 {
-		out.Time = node.Data.Time
+	// 时间：用 node 真实发送时间（扁平格式 FlatTime 或嵌套 Data.Time），让 Kimi 看到
+	// 节点间真实间隔；node 没给时间时保留外层时间。
+	if t := node.EffectiveTime(); t > 0 {
+		out.Time = t
 	}
 
-	// 给伪消息一个稳定的、与外层冲突小的 MessageID：外层 ID 高位 + 节点 idx 低位。
-	// 不影响 LRU 去重（HandleAtMessage 顶部的 ProcessedMsgIDs 不会再处理这些伪消息，
-	// 因为我们绕过了它，直接进 Push）。
-	out.MessageID = composePseudoMsgID(forwarder.MessageID, idx)
+	// MessageID：优先用扁平格式带的真实 inner message_id（NapCat 实测会给出
+	// FlatMessageID，是内层消息在 QQ 端的真实 ID）；没拿到 fallback 到伪 ID
+	// （外层 ID 高位 + idx 低位）。
+	if node.FlatMessageID != 0 {
+		out.MessageID = node.FlatMessageID
+	} else {
+		out.MessageID = composePseudoMsgID(forwarder.MessageID, idx)
+	}
 	return &out
 }
 

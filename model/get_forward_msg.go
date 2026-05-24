@@ -34,22 +34,49 @@ type GetForwardMsgReq struct {
 	ID        string `json:"id,omitempty"` // 兜底字段
 }
 
+// ForwardNodeData OB11 标准 node 段的嵌套 data 结构。
+//
+// 实测中 NapCat 把字段**扁平**放在 ForwardNode 顶层（不嵌 data），所以本字段在实际
+// 响应里通常是空——保留是为了向后兼容 OB11 标准格式（自定义 node 时仍会用嵌套结构）。
 type ForwardNodeData struct {
 	UserID   int64            `json:"user_id"`
 	Nickname string           `json:"nickname"`
 	Time     int64            `json:"time"`
 	Sender   *Sender          `json:"sender,omitempty"`
 	Message  []MessageSegment `json:"message"`
-	// Content 是 NapCat 旧版字段，等价 Message；reflect 解码后由 helper 兜底。
-	Content []MessageSegment `json:"content,omitempty"`
+	Content  []MessageSegment `json:"content,omitempty"`
 }
 
+// ForwardNode 合并转发里的一条子消息。
+//
+// 兼容两种格式：
+//
+//   - **OB11 标准嵌套**（自定义节点常用）：{"type":"node","data":{"user_id":...,"message":[...]}}
+//     → Type/Data 字段；EffectiveXxx 从 Data 取
+//   - **NapCat 实测扁平**（/get_forward_msg 实际返回）：{"self_id":...,"user_id":...,
+//     "sender":{...},"message":[...]}，所有字段直接在顶层
+//     → FlatXxx 字段；EffectiveXxx 从顶层取
+//
+// EffectiveSegments / EffectiveUserID / EffectiveNickname 三个 helper 内部按顺序探测，
+// 调用方不需要关心 NapCat 用了哪种格式。
 type ForwardNode struct {
-	Type string          `json:"type"`
-	Data ForwardNodeData `json:"data"`
+	// 嵌套格式字段（OB11 标准）
+	Type string          `json:"type,omitempty"`
+	Data ForwardNodeData `json:"data,omitempty"`
+
+	// 扁平格式字段（NapCat 实测）—— 直接复用 Message 结构里同名 JSON tag
+	FlatSelfID     int64            `json:"self_id,omitempty"`
+	FlatUserID     int64            `json:"user_id,omitempty"`
+	FlatTime       int64            `json:"time,omitempty"`
+	FlatMessageID  int64            `json:"message_id,omitempty"`
+	FlatSender     *Sender          `json:"sender,omitempty"`
+	FlatMessage    []MessageSegment `json:"message,omitempty"`
+	FlatContent    []MessageSegment `json:"content,omitempty"` // 旧版 NapCat 扁平格式下的 inner segments
+	FlatRawMessage string           `json:"raw_message,omitempty"`
 }
 
-// EffectiveSegments 返回 node 真正的 segments：优先 Message，回退 Content。
+// EffectiveSegments 返回 node 真正的 segments：
+// 优先嵌套 Data.Message → Data.Content → 扁平 FlatMessage → FlatContent。
 func (n *ForwardNode) EffectiveSegments() []MessageSegment {
 	if n == nil {
 		return nil
@@ -57,11 +84,17 @@ func (n *ForwardNode) EffectiveSegments() []MessageSegment {
 	if len(n.Data.Message) > 0 {
 		return n.Data.Message
 	}
-	return n.Data.Content
+	if len(n.Data.Content) > 0 {
+		return n.Data.Content
+	}
+	if len(n.FlatMessage) > 0 {
+		return n.FlatMessage
+	}
+	return n.FlatContent
 }
 
-// EffectiveUserID 返回 node 真正的发送者 user_id：
-// 优先 data.user_id，回退 data.sender.user_id。
+// EffectiveUserID 同上探测顺序：Data.UserID → Data.Sender.UserID → FlatUserID →
+// FlatSender.UserID。
 func (n *ForwardNode) EffectiveUserID() int64 {
 	if n == nil {
 		return 0
@@ -69,13 +102,19 @@ func (n *ForwardNode) EffectiveUserID() int64 {
 	if n.Data.UserID != 0 {
 		return n.Data.UserID
 	}
-	if n.Data.Sender != nil {
+	if n.Data.Sender != nil && n.Data.Sender.UserID != 0 {
 		return n.Data.Sender.UserID
+	}
+	if n.FlatUserID != 0 {
+		return n.FlatUserID
+	}
+	if n.FlatSender != nil {
+		return n.FlatSender.UserID
 	}
 	return 0
 }
 
-// EffectiveNickname 同上。
+// EffectiveNickname 同 EffectiveUserID 探测顺序。
 func (n *ForwardNode) EffectiveNickname() string {
 	if n == nil {
 		return ""
@@ -83,10 +122,24 @@ func (n *ForwardNode) EffectiveNickname() string {
 	if n.Data.Nickname != "" {
 		return n.Data.Nickname
 	}
-	if n.Data.Sender != nil {
+	if n.Data.Sender != nil && n.Data.Sender.Nickname != "" {
 		return n.Data.Sender.Nickname
 	}
+	if n.FlatSender != nil && n.FlatSender.Nickname != "" {
+		return n.FlatSender.Nickname
+	}
 	return ""
+}
+
+// EffectiveTime 优先嵌套 → 扁平。0 表示 node 没带时间。
+func (n *ForwardNode) EffectiveTime() int64 {
+	if n == nil {
+		return 0
+	}
+	if n.Data.Time > 0 {
+		return n.Data.Time
+	}
+	return n.FlatTime
 }
 
 type GetForwardMsgData struct {
