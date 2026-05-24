@@ -213,11 +213,19 @@ func expandAndPushForward(msg *model.Message) {
 	zaplog.Logger.Infof("forward 展开 group=%d msgid=%d nodes=%d cost=%s",
 		msg.GroupID, msg.MessageID, len(expanded), time.Since(start))
 
-	// 注意：Push 入桶后等 60s 沉默才整体送 Kimi 识别。若展开后超出 maxSize=20，
-	// Push 内的"桶满兜底"会先 flush 一半再继续——对结果质量影响不大（Kimi 会被调
-	// 多次），且实际聊天记录里上架内容很少超过 20 条，先按这个走。
+	// Push 入桶后等 60s 沉默才整体送 Kimi 识别。每条伪消息走 PushFromForward 让它带
+	// "来自聊天记录"标记 + node 的原始时间，Kimi prompt 会按"每条独立判定"识别每个
+	// 商品，避免把整段聊天记录归到一个上架（详见 recognizeSystemPrompt "聊天记录
+	// 展开"那节）。
 	for _, pseudo := range expanded {
-		autoReplyMgr.Push(pseudo.GroupID, pseudo.UserID, strings.TrimSpace(pseudo.Sender.Nickname), pseudo)
+		// node 的 Time 是 unix 秒；零值 / 负数都视为"没拿到"，让 Push 内部 fallback
+		// 到入桶时间。
+		var originTime time.Time
+		if pseudo.Time > 0 {
+			originTime = time.Unix(pseudo.Time, 0)
+		}
+		autoReplyMgr.PushFromForward(pseudo.GroupID, pseudo.UserID,
+			strings.TrimSpace(pseudo.Sender.Nickname), pseudo, originTime)
 	}
 }
 

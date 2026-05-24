@@ -48,10 +48,22 @@ import (
 type autoReplyMsg struct {
 	MessageID int64
 	UserID    int64
-	UserCard  string // 用户展示名——**只**取 sender.nickname（QQ 全局昵称），不允许群名片污染
-	Time      time.Time
+	UserCard  string                 // 用户展示名——**只**取 sender.nickname（QQ 全局昵称），不允许群名片污染
+	Time      time.Time              // 入桶时间——给"滑动窗口裁剪 / silence 计时"用
 	Segments  []model.MessageSegment // 原 segments（含 image url、at、text 等）
 	FlatText  string                 // 扁平化的文本表示（含 [图片] 等占位符），方便 log / 喂 LLM
+	// OriginTime 这条消息的"逻辑时间"——给 buildRecognizeInput 优先用，显示真实发送
+	// 时间让 Kimi 看到节点间真实间隔。零值时 buildRecognizeInput 会 fallback 到 Time。
+	//
+	// 为什么不直接用 Time：Time 还要给滑动窗口裁剪用——如果让"聊天记录里 1 小时前
+	// 的 node"伪装成 1 小时前入桶，滑动窗口会立刻把它当过期消息扔掉，达不到展开
+	// 喂 Kimi 的目的。所以拆成 Time（实际入桶）+ OriginTime（语义层时间）两个字段。
+	OriginTime time.Time
+	// FromForwardChat 这条消息是不是"聊天记录展开后的子消息"。
+	// true 时 buildRecognizeInput 会在 segments 开头加 [来自聊天记录] 占位，让 Kimi
+	// 知道这条原本是用户**过去某时刻独立发布**的——不要跟其它消息合并成同一个商品。
+	// 详见 forward_expand.go::expandAndPushForward。
+	FromForwardChat bool
 }
 
 // autoReplyBucket 单个 (group, user) 的滑动窗口。
@@ -87,6 +99,21 @@ var autoReplyMgr = &autoReplyManager{
 //
 // 不会主动 flush——flush 由扫描协程按时间/容量触发。
 func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *model.Message) {
+	m.pushInternal(groupID, userID, userCard, msg, time.Time{}, false)
+}
+
+// PushFromForward 跟 Push 同义，但额外标记"这条来自聊天记录展开后的子消息"，
+// 并指定逻辑时间（node 在源聊天里的发送时间，秒级 unix）。
+//
+// 用途：handleAutoReply 检测到 forward 段时把整段消息异步展开成 N 条伪消息，
+// 用本函数 push 进同一桶。Kimi prompt 据此判定"每条独立判定 / 不合并"。
+//
+// originTime 为零值时 fallback 到 time.Now()（节点没带 time 字段时用得上）。
+func (m *autoReplyManager) PushFromForward(groupID, userID int64, userCard string, msg *model.Message, originTime time.Time) {
+	m.pushInternal(groupID, userID, userCard, msg, originTime, true)
+}
+
+func (m *autoReplyManager) pushInternal(groupID, userID int64, userCard string, msg *model.Message, originTime time.Time, fromForward bool) {
 	if msg == nil {
 		return
 	}
@@ -102,12 +129,14 @@ func (m *autoReplyManager) Push(groupID, userID int64, userCard string, msg *mod
 		m.buckets[key] = b
 	}
 	b.Msgs = append(b.Msgs, autoReplyMsg{
-		MessageID: msg.MessageID,
-		UserID:    userID,
-		UserCard:  userCard,
-		Time:      now,
-		Segments:  msg.Message,
-		FlatText:  flattenMessageText(msg),
+		MessageID:       msg.MessageID,
+		UserID:          userID,
+		UserCard:        userCard,
+		Time:            now, // 入桶时间——给窗口裁剪用，统一是 now
+		OriginTime:      originTime,
+		Segments:        msg.Message,
+		FlatText:        flattenMessageText(msg),
+		FromForwardChat: fromForward,
 	})
 	b.LastSeenAt = now
 
@@ -426,7 +455,13 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 func buildRecognizeInput(key autoReplyBucketKey, userCard string, snap []autoReplyMsg) kimi.RecognizeInput {
 	msgs := make([]kimi.RecognizeMsg, 0, len(snap))
 	for _, m := range snap {
-		segs := make([]string, 0, len(m.Segments))
+		segs := make([]string, 0, len(m.Segments)+1)
+		// FromForwardChat=true：在 segments 开头标"[来自聊天记录]"，让 Kimi 知道
+		// 这条原本是用户**过去某时刻独立发布**的——不要跟其它消息合并成同一个商品。
+		// 详见 recognizeSystemPrompt 里"聊天记录展开"那节。
+		if m.FromForwardChat {
+			segs = append(segs, "[来自聊天记录]")
+		}
 		for _, seg := range m.Segments {
 			switch seg.Type {
 			case "text":
@@ -454,9 +489,14 @@ func buildRecognizeInput(key autoReplyBucketKey, userCard string, snap []autoRep
 				segs = append(segs, "["+seg.Type+"]")
 			}
 		}
+		// 优先用 OriginTime（来自聊天记录的节点）展示真实发送时间；零值 fallback Time
+		displayTime := m.Time
+		if !m.OriginTime.IsZero() {
+			displayTime = m.OriginTime
+		}
 		msgs = append(msgs, kimi.RecognizeMsg{
 			MessageID: m.MessageID,
-			Time:      m.Time.Format("15:04:05"),
+			Time:      displayTime.Format("15:04:05"),
 			Segments:  segs,
 		})
 	}
