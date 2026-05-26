@@ -22,9 +22,13 @@
 package logic
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
+	_ "image/png" // PNG 自动解码注册
 	"io"
 	"net/http"
 	"qq_bot/global"
@@ -38,6 +42,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/disintegration/imaging"
 )
 
 // ackKind 回执等级枚举——决定 processSnapshot 要不要把这条 ack 真发到群里。
@@ -786,11 +792,20 @@ func imageURLsFromSnap(snap []autoReplyMsg, msgIDs []int64) []string {
 // 给到 15 秒已经留了网络抖动的余量。超时 = skip 这张图，不阻塞商品发布。
 const mirrorImageDownloadTimeout = 15 * time.Second
 
-// mirrorImageMaxBytes 单张图允许的最大字节数；跟 hfut 那边 BotUploadImageMaxBytes 对齐。
+// mirrorImageMaxBytes 单张图**上传到 hfut OSS** 允许的最大字节数。
 //
-// 防御场景：恶意构造的 url 返回超大文件吃光 bot 内存。
-// 真实群聊照片普遍 < 2MB，10MB 已经是非常富余的兜底。
+// 跟 hfut 那边 BotUploadImageMaxBytes 对齐。超出此上限不会直接拒绝，而是先在
+// bot 本地走 compressImageToLimit 压缩（JPEG quality 递减 / 必要时缩小分辨率）
+// 让超大图也能上架——iPhone 拍的 RAW、4K 原图很容易过 10MB。
 const mirrorImageMaxBytes = 10 * 1024 * 1024
+
+// mirrorImageDownloadMaxBytes 单张图允许下载到本地内存的最大字节数（防 OOM 兜底）。
+//
+// 比上传上限大不少——超过 10MB 的图我们还要在本地压缩到 10MB 内才上传，所以
+// 下载缓冲必须能装下"压缩前的原始尺寸"。50MB 足以容纳 iPhone Pro RAW 单图 / 4K
+// 全屏截图等常见超大场景；真正异常大（>50MB）的图基本是恶意构造或者 RAW 文件，
+// 拒收。
+const mirrorImageDownloadMaxBytes = 50 * 1024 * 1024
 
 // mirrorImagesConcurrency 单次批量转存并发度。
 //
@@ -876,10 +891,15 @@ func mirrorImagesToHfut(ctx context.Context, userID uint, napcatURLs []string) [
 	return out
 }
 
-// mirrorOneImage 单张图的转存：下载 → 推断扩展名 → 上传。
+// mirrorOneImage 单张图的转存：下载 → (超出 10MB 时压缩) → 推断扩展名 → 上传。
 //
 // 单独抽出来是为了让 mirrorImagesToHfut 的循环逻辑清晰；并且每张图用独立 ctx
 // 控制超时，一张失败不影响其它。
+//
+// 超大图处理：原始下载允许到 mirrorImageDownloadMaxBytes（50MB），下载后如果
+// size > mirrorImageMaxBytes（10MB）走 compressImageToLimit 在本地压缩——优先
+// JPEG quality 递减，再不行就缩分辨率，尽量保持画质。这样 iPhone 4K / RAW 等
+// 大图也能正常上架；只有真正畸形大（>50MB）才会被拒收。
 func mirrorOneImage(parent context.Context, userID uint, srcURL string) (string, error) {
 	dlCtx, cancel := context.WithTimeout(parent, mirrorImageDownloadTimeout)
 	defer cancel()
@@ -897,20 +917,36 @@ func mirrorOneImage(parent context.Context, userID uint, srcURL string) (string,
 		return "", fmt.Errorf("下载图片 HTTP %d", resp.StatusCode)
 	}
 
-	// io.LimitReader 提前截断防 OOM；超过上限时拒收
-	limited := io.LimitReader(resp.Body, mirrorImageMaxBytes+1)
+	// io.LimitReader 提前截断防 OOM；超过下载上限时拒收（防恶意构造）
+	limited := io.LimitReader(resp.Body, mirrorImageDownloadMaxBytes+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
 		return "", fmt.Errorf("读响应: %w", err)
 	}
-	if len(data) > mirrorImageMaxBytes {
-		return "", fmt.Errorf("图片超过 %dMB 上限", mirrorImageMaxBytes/1024/1024)
+	if len(data) > mirrorImageDownloadMaxBytes {
+		return "", fmt.Errorf("图片下载超过 %dMB 上限（疑似异常大）", mirrorImageDownloadMaxBytes/1024/1024)
 	}
 	if len(data) == 0 {
 		return "", errors.New("下载到的图片为空")
 	}
 
-	filename := guessImageFilename(srcURL, resp.Header.Get("Content-Type"))
+	contentType := resp.Header.Get("Content-Type")
+	filename := guessImageFilename(srcURL, contentType)
+
+	// 超出 hfut 上限时先在 bot 本地压缩——优先 JPEG quality 递减保持画质，
+	// 仍不行才 resize。压缩后强制 .jpg 扩展名以匹配重编码后的 MIME。
+	if len(data) > mirrorImageMaxBytes {
+		origSize := len(data)
+		compressed, cerr := compressImageToLimit(data, mirrorImageMaxBytes)
+		if cerr != nil {
+			return "", fmt.Errorf("图片超过 %dMB 且压缩失败: %w",
+				mirrorImageMaxBytes/1024/1024, cerr)
+		}
+		zaplog.Logger.Infof("mirrorOneImage 图片压缩 user=%d %dKB → %dKB",
+			userID, origSize/1024, len(compressed)/1024)
+		data = compressed
+		filename = "img.jpg"
+	}
 
 	// 上传给独立留 30s 超时——内网调用，足够。
 	upCtx, upCancel := context.WithTimeout(parent, 30*time.Second)
@@ -920,6 +956,59 @@ func mirrorOneImage(parent context.Context, userID uint, srcURL string) (string,
 		return "", fmt.Errorf("上传到 hfut: %w", err)
 	}
 	return resp2.URL, nil
+}
+
+// compressImageToLimit 把图片压缩到 limit 字节以内，**优先保画质**：
+//
+//  1. 先尝试 JPEG 重编码，quality 从 85 起逐档下降（85 → 75 → 65 → 55 → 45）；
+//     绝大多数 11~20MB 的群图在 quality=75 上下就能压到 5-8MB。
+//  2. 仍超 limit 时先 resize 到长边 3000px（保宽高比），再走 85→55 一档档试。
+//  3. 还不行就 resize 到长边 2000px 走 85→45（极端兜底）。
+//
+// 失败返回 error；成功返回新 bytes（JPEG 格式）。
+//
+// 输入支持 image 包注册的所有格式（JPEG / PNG / GIF——已 _ import；WebP 走
+// disintegration/imaging 间接注册）。
+func compressImageToLimit(raw []byte, limit int) ([]byte, error) {
+	img, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+
+	tryEncodeJPEG := func(im image.Image, qualities []int) ([]byte, int, bool) {
+		for _, q := range qualities {
+			var buf bytes.Buffer
+			if jerr := jpeg.Encode(&buf, im, &jpeg.Options{Quality: q}); jerr != nil {
+				continue
+			}
+			if buf.Len() <= limit {
+				return buf.Bytes(), q, true
+			}
+		}
+		return nil, 0, false
+	}
+
+	// 阶段 1：原分辨率，quality 递减
+	if out, _, ok := tryEncodeJPEG(img, []int{85, 75, 65, 55, 45}); ok {
+		return out, nil
+	}
+
+	// 阶段 2：长边 ≤ 3000，再压
+	if img.Bounds().Dx() > 3000 || img.Bounds().Dy() > 3000 {
+		fit := imaging.Fit(img, 3000, 3000, imaging.Lanczos)
+		if out, _, ok := tryEncodeJPEG(fit, []int{85, 75, 65, 55}); ok {
+			return out, nil
+		}
+		img = fit
+	}
+
+	// 阶段 3：长边 ≤ 2000，极端兜底
+	fit := imaging.Fit(img, 2000, 2000, imaging.Lanczos)
+	if out, _, ok := tryEncodeJPEG(fit, []int{85, 75, 65, 55, 45}); ok {
+		return out, nil
+	}
+
+	return nil, fmt.Errorf("即使长边压到 2000px / quality=45 仍超过 %dMB", limit/1024/1024)
 }
 
 // guessImageFilename 给 hfut 那边一个像样的 filename；hfut 端只看扩展名做白名单。
