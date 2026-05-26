@@ -809,10 +809,16 @@ const mirrorImageDownloadMaxBytes = 50 * 1024 * 1024
 
 // mirrorImagesConcurrency 单次批量转存并发度。
 //
-// 经验值：4 并发。bot 的瓶颈通常是腾讯多媒体 CDN 下载（rkey 鉴权 + 限速），
-// 单连接 1-3s/张；并发 4 能压到 14 张总 ~5-8s，对比串行 14 张 30-50s 是质变。
-// 再大并发对 hfut OSS 反压不友好（hfut 端单连接 token / 节流敏感）。
-const mirrorImagesConcurrency = 4
+// 经验值：2 并发。
+//
+// 之前用 4，实测发现 hfut /api/v1/bot/images 接口在 14 张并发上传时频繁出现
+// "Client.Timeout exceeded while awaiting headers"——hfut 服务端单进程 + OSS
+// 上游链路 在 4 个 multipart 请求同时打过来时容易长尾。降到 2 后单连接获得更多
+// 服务端 IO，整体反而更稳；2 worker × 平均 5s/张 = 14 张约 35s，对比并发 4 撞
+// 超时后整体几分钟，结果好很多。
+//
+// bot 这一侧 → 腾讯多媒体 CDN 下载没问题（rkey 限速但够快），瓶颈在 hfut OSS 上传。
+const mirrorImagesConcurrency = 2
 
 // mirrorImagesToHfut 把 NapCat 临时 URL 列表转成 hfut OSS 永久 URL 列表。
 //

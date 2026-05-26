@@ -86,7 +86,20 @@ func NewClient(baseURL, jwtSecret, serviceName string) (*Client, error) {
 		jwtSecret:   []byte(jwtSecret),
 		serviceName: serviceName,
 		httpClient: &http.Client{
-			Timeout:   30 * time.Second, // bot 路径的所有调用都该几秒内回，30s 足够兜底
+			// Client.Timeout 是**全局上限**，会覆盖单次请求的 ctx 超时。**绝对不能**
+			// 设得比任何一个调用方的 ctx 超时短，否则 ctx 永远没机会生效——错误信息
+			// 是 "Client.Timeout exceeded while awaiting headers"，跟 ctx deadline
+			// exceeded 长得像但本质不同。
+			//
+			// 现有调用方的 ctx 超时：
+			//   - runtime_config_sync.go: 5s
+			//   - qq_display_sync.go:    15s
+			//   - bot 路径其它调用:        15-60s
+			//   - UploadImage（图片转存）: 90s（mirrorOneImage 用 uploadImageWithRetry）
+			//
+			// 取 120s 兜底——比最长的 90s 多 30s 余量，防止个别 hfut→OSS 慢请求把
+			// ctx 算到了但 TLS 握手还没完成的边角；同时也不至于无限等导致 goroutine 泄漏。
+			Timeout:   120 * time.Second,
 			Transport: newHfutTransport(),
 		},
 	}, nil

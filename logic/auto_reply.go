@@ -359,10 +359,10 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 	}
 
 	// 调 Kimi 识别 + 后续整段 dispatch（含图片转存 + 落库）共享 ctx。
-	// 给 180s 兜底——单次 moonshot completions 通常几秒，但批量上架可能涉及
-	// 20+ 张图需要并发下载 + 上传到 OSS（mirrorImagesToHfut），最坏情况叠加耗时
-	// 接近 1min；60s 不够，180s 给批量场景足够余量。
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	// 给 300s 兜底——单次 moonshot completions 通常几秒，但批量上架的图片转存是大头：
+	// mirrorImagesToHfut 并发 2 串行上传 hfut OSS，单张 5-15s（含重试），20 张图
+	// 最坏情况 ~150s。300s 留 2x 余量足够。
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
 	input := buildRecognizeInput(key, first.UserCard, snap)
