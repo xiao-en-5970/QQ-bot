@@ -948,14 +948,79 @@ func mirrorOneImage(parent context.Context, userID uint, srcURL string) (string,
 		filename = "img.jpg"
 	}
 
-	// 上传给独立留 30s 超时——内网调用，足够。
-	upCtx, upCancel := context.WithTimeout(parent, 30*time.Second)
-	defer upCancel()
-	resp2, err := global.Hfut.UploadImage(upCtx, userID, data, filename)
+	// 上传单张图：90s 超时 + 1 次重试。
+	//
+	// 之前固定 30s 经常被 hfut OSS / 上游网络瞬抖触发 context deadline exceeded
+	// （hfut 端实际处理通常 1-5s，但偶尔会卡 20-40s）；放宽到 90s + 加一次退避重试
+	// 让单张图失败率从 ~5% 降到接近 0。两次合计最长 ~180s，刚好不超过 dispatch
+	// parent ctx 的 180s 上限。
+	resp2, err := uploadImageWithRetry(parent, userID, data, filename)
 	if err != nil {
 		return "", fmt.Errorf("上传到 hfut: %w", err)
 	}
 	return resp2.URL, nil
+}
+
+// uploadImageWithRetry 单图上传带 1 次退避重试。
+//
+// 第一次：90s 超时。
+// 失败后退避 2s 再试一次（再 90s 超时）。
+//
+// 仅对**网络/服务端瞬态错**重试——4xx 业务错（image 太大、格式不支持等）不应该
+// 重试，retry 只浪费时间。这里的判定简化为：err 含 "context deadline exceeded"
+// / "timeout" / "EOF" / "connection" / 5xx 视为瞬态；其它直接返回。
+func uploadImageWithRetry(parent context.Context, userID uint, data []byte, filename string) (*hfut.UploadImageResp, error) {
+	doOnce := func() (*hfut.UploadImageResp, error) {
+		ctx, cancel := context.WithTimeout(parent, 90*time.Second)
+		defer cancel()
+		return global.Hfut.UploadImage(ctx, userID, data, filename)
+	}
+	resp, err := doOnce()
+	if err == nil {
+		return resp, nil
+	}
+	if !isTransientUploadErr(err) {
+		return nil, err
+	}
+	zaplog.Logger.Warnf("uploadImage 瞬态错重试一次 user=%d filename=%s: %v", userID, filename, err)
+	// 退避 2s，避开短暂高峰；过程中要尊重 parent ctx 取消
+	select {
+	case <-time.After(2 * time.Second):
+	case <-parent.Done():
+		return nil, parent.Err()
+	}
+	return doOnce()
+}
+
+// isTransientUploadErr 判定 hfut 上传错误是否值得重试。
+//
+// 保守策略：网络层错（deadline / timeout / EOF / connection reset）+ 5xx 视为瞬态。
+// 业务层错（图片格式不支持、文件太大等）/ 4xx 不重试。
+func isTransientUploadErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	// hfut ClientError：HTTPStatus 5xx 才重试
+	var ce *hfut.ClientError
+	if errors.As(err, &ce) {
+		return ce.HTTPStatus >= 500 && ce.HTTPStatus < 600
+	}
+	s := err.Error()
+	for _, kw := range []string{
+		"context deadline exceeded",
+		"timeout",
+		"EOF",
+		"connection reset",
+		"connection refused",
+		"broken pipe",
+		"i/o timeout",
+		"no such host",
+	} {
+		if strings.Contains(s, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // compressImageToLimit 把图片压缩到 limit 字节以内，**优先保画质**：
