@@ -230,6 +230,81 @@ type UpsertQQChildResp struct {
 	Nickname string `json:"nickname,omitempty"`
 }
 
+// =============================================================================
+// 异步上架链路
+// =============================================================================
+//
+// 跟同步 PublishGood 的差别：bot 只推一个轻量任务（含 NapCat 临时 URL 列表 + 商品
+// 元数据），hfut 端 worker 串行处理（mirror 所有图 + 创建 goods）。bot 通过短轮询
+// 拿结果。详见 hfut/service/bot_publish_task.go 顶部设计文档。
+
+// PublishGoodAsyncReq bot 入队上架任务的请求体。
+type PublishGoodAsyncReq struct {
+	UserID        uint     `json:"user_id"`
+	GroupID       int64    `json:"group_id,omitempty"`
+	Title         string   `json:"title"`
+	Content       string   `json:"content"`
+	Category      int16    `json:"category"`
+	Negotiable    bool     `json:"negotiable"`
+	Bargain       bool     `json:"bargain,omitempty"`
+	Price         int      `json:"price,omitempty"`
+	Stock         int      `json:"stock,omitempty"`
+	Location      string   `json:"location,omitempty"`
+	IsBatch       bool     `json:"is_batch,omitempty"`
+	SrcURLs       []string `json:"src_urls,omitempty"` // NapCat 临时图 URL 列表（hfut 端 worker 转 OSS）
+	BotMessageIDs []int64  `json:"bot_message_ids,omitempty"`
+	Force         bool     `json:"force,omitempty"`
+}
+
+// PublishGoodAsyncResp 入队成功后立即返回——bot 拿到 task_id 后启轮询协程。
+type PublishGoodAsyncResp struct {
+	TaskID string             `json:"task_id"`
+	Status PublishTaskStatus  `json:"status"`
+}
+
+// PublishTaskStatus 任务状态机：queued / processing / done / failed。
+type PublishTaskStatus string
+
+const (
+	PublishTaskQueued     PublishTaskStatus = "queued"
+	PublishTaskProcessing PublishTaskStatus = "processing"
+	PublishTaskDone       PublishTaskStatus = "done"
+	PublishTaskFailed     PublishTaskStatus = "failed"
+)
+
+// PublishTaskStatusResp 查询任务状态的返回。
+type PublishTaskStatusResp struct {
+	TaskID       string            `json:"task_id"`
+	Status       PublishTaskStatus `json:"status"`
+	GoodID       *uint             `json:"good_id,omitempty"`
+	MirrorTotal  int               `json:"mirror_total"`
+	MirrorDone   int               `json:"mirror_done"`
+	MirrorFailed int               `json:"mirror_failed"`
+	Error        string            `json:"error,omitempty"`
+	UpdatedAt    string            `json:"updated_at,omitempty"`
+}
+
+// PublishGoodAsync 异步入队一个上架任务。立即返回 task_id（< 100ms 预期）。
+//
+// 后续 bot 端用 GetPublishTask(task_id) 短轮询拿结果。
+func (c *Client) PublishGoodAsync(ctx context.Context, req PublishGoodAsyncReq) (*PublishGoodAsyncResp, error) {
+	var out PublishGoodAsyncResp
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/bot/goods/async", &req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetPublishTask 查询任务状态。404 = task_id 不存在；其它错原样冒上去。
+func (c *Client) GetPublishTask(ctx context.Context, taskID string) (*PublishTaskStatusResp, error) {
+	var out PublishTaskStatusResp
+	path := "/api/v1/bot/tasks/" + taskID
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // PublishGoodReq 上架商品入参。
 //
 // GroupID：bot 触发本次上架时来源 QQ 群号；后端持久化到 goods.created_in_group_id，

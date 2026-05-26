@@ -31,6 +31,7 @@ import (
 	_ "image/png" // PNG 自动解码注册
 	"io"
 	"net/http"
+	"qq_bot/conf"
 	"qq_bot/global"
 	"qq_bot/model"
 	"qq_bot/utils/client_pool"
@@ -548,14 +549,27 @@ func parseHFUTTime(s string) (time.Time, error) {
 // publish_good — 上架商品
 // =============================================================================
 
-// dispatchPublishGood 把 publish_good action 落库。key.GroupID 是 bot 收到该消息的 QQ 群号——
-// 后端会持久化到 goods.created_in_group_id，给孤儿商品 "请求下架" 提供精准的 @ 卖家位置。
+// dispatchPublishGood 把 publish_good action **异步入队**给 hfut 端 worker 处理。
+//
+// 流程：
+//
+//	① 同步：计算 title/content/price/...
+//	② 同步：调 hfut /api/v1/bot/goods/async 入队（DB INSERT + Redis LPUSH，< 100ms）
+//	   - 命中去重 → 走原 dup 反问路径
+//	   - 其它错 → 返 ackKindFail
+//	③ 启 goroutine 短轮询 task 状态（每 2s）
+//	   - status=done → 发"已发布..."ack + recentGood + 反查 + ops 通知
+//	   - status=failed → 发"上架失败..."ack
+//	   - 3 分钟还未完成 → 发"系统繁忙，请重试"ack
+//	④ 主流程立即返回 ackKindIgnore（按 single-ack 模式，不发任何中间消息）
+//
+// 跟旧同步路径的差别：图片转存（mirror）+ 落库都移到了 hfut 端 worker（串行处理，
+// 避免并发打爆 OSS 端反压）。bot 端只做入队 + 轮询，单 task 入队不会阻塞 dispatch
+// ctx，**避免之前 "5 分钟 mirror 把 dispatch 300s 用爆"** 的情况。
 func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uint, snap []autoReplyMsg, a kimi.RecognizeAction) ackResult {
 	groupID := key.GroupID
-	// 用 ImageMessageIDs 还原图片 URL（NapCat 临时 URL）
+	// 用 ImageMessageIDs 还原 NapCat 临时图片 URL——直接传给 hfut 端 worker 自己拉源
 	napcatImages := imageURLsFromSnap(snap, a.ImageMessageIDs)
-	// 转存到 hfut OSS 拿永久 URL；任一张转存失败就 skip 那张（不让整体上架失败）
-	images := mirrorImagesToHfut(ctx, userID, napcatImages)
 
 	// 价格 / 面议判定（产品形态：cat=1 二手；cat=2 求物品）
 	//
@@ -585,9 +599,7 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 	if a.IsBatch {
 		content = normalizeBatchContent(content)
 	}
-	// resp 里有 GoodID 用于"最近一条"快速查找；不在群里展示给用户——
-	// 用户在 app "我的发布" 列表能看到刚发的，没必要再给个数字增加阅读负担。
-	pubReq := hfut.PublishGoodReq{
+	asyncReq := hfut.PublishGoodAsyncReq{
 		UserID:        userID,
 		GroupID:       groupID,
 		Title:         strings.TrimSpace(a.Title),
@@ -596,20 +608,35 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 		Negotiable:    negotiable,
 		Bargain:       a.Bargain,
 		Price:         priceCents,
-		Stock:         a.Stock, // <=0 时 hfut 后端按 1 兜底（详见 BotPublishGood 注释）
+		Stock:         a.Stock,
 		Location:      strings.TrimSpace(a.Location),
-		Images:        images,
+		IsBatch:       a.IsBatch,
+		SrcURLs:       napcatImages,
 		BotMessageIDs: botMsgIDs,
-		IsBatch:       a.IsBatch, // 合并聊天记录的"批量上架"商品；hfut 落 goods.is_batch
 	}
-	resp, err := global.Hfut.PublishGood(ctx, pubReq)
+
+	// 入队——预期 < 100ms 返回 task_id；hfut 端**同步**做 title 去重，命中直接回 dup
+	enqResp, err := global.Hfut.PublishGoodAsync(ctx, asyncReq)
 	if err != nil {
-		// 去重保护命中——不视为失败，给用户友好提示，不重复上架
+		// 去重保护命中——同步路径返回 dup 即走原反问流程
 		var dup *hfut.DuplicateGoodInfo
 		if errors.As(err, &dup) {
 			zaplog.Logger.Infof("autoReply 去重命中 user=%d title=%q existing=%d/%q",
 				userID, a.Title, dup.ExistingID, dup.ExistingTitle)
-			origReq := pubReq // 拷贝供反问 followup 用
+			origReq := hfut.PublishGoodReq{
+				UserID:        userID,
+				GroupID:       groupID,
+				Title:         asyncReq.Title,
+				Content:       asyncReq.Content,
+				Category:      asyncReq.Category,
+				Negotiable:    asyncReq.Negotiable,
+				Bargain:       asyncReq.Bargain,
+				Price:         asyncReq.Price,
+				Stock:         asyncReq.Stock,
+				Location:      asyncReq.Location,
+				IsBatch:       asyncReq.IsBatch,
+				BotMessageIDs: asyncReq.BotMessageIDs,
+			}
 			dupOffShelfMgr.Save(key, userID, dup.ExistingID, dup.ExistingTitle, &origReq)
 			showTitle := dup.ExistingTitle
 			if showTitle == "" {
@@ -624,7 +651,7 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 				Kind: ackKindDup,
 			}
 		}
-		zaplog.Logger.Errorf("autoReply hfut PublishGood 失败 user=%d title=%q: %v", userID, a.Title, err)
+		zaplog.Logger.Errorf("autoReply hfut PublishGoodAsync 失败 user=%d title=%q: %v", userID, a.Title, err)
 		// 批量上架失败时 title 是 N 个商品名串联（可能上百字），群里贴这种长串体验差——
 		// 单独走简短文案。
 		failText := fmt.Sprintf("「%s」未发出，稍后再试", orPlaceholder(a.Title, "这条"))
@@ -642,35 +669,81 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 		}
 	}
 
-	// 成功回执——只保留**用户最关心的核心字段**：分类 + 标题 + 价格 + 可选数量。
-	//
-	// 设计原则：群里的 ack 越精简越好。地点 / 配图数 / 描述这些信息在 app 详情页
-	// 都有，群消息里堆这些反而像"bot 在告诉群友我能搞清楚什么"。统一文案形态：
-	//
-	//   - 二手有价：     已发布 二手「鞋架」 6 元
-	//   - 二手面议：     已发布 二手「鞋架」 面议
-	//   - 求物品有偿：   已发布 求「电瓶车」 50 元（有偿）
-	//   - 求物品无价：   已发布 求「电瓶车」
-	//   - 带数量：       已发布 二手「鞋架」 6 元 × 3
-	//
-	// 注意：QQ 上架的商品 / 求物品有自动有效期（二手 30 天、求物品 7 天，由 hfut
-	// service.BotPublishGood 自动设 deadline），但**不在群回执里提**——app 端
-	// deadline 标签会显示剩余时间，群里少一行减少干扰。
+	// 入队成功——启轮询协程异步等结果。返回 ackKindIgnore 让 processSnapshot 不发
+	// 任何中间消息（按 single-ack 模式，最终消息由 poller 直接 SendGroupAtText）。
+	zaplog.Logger.Infof("autoReply 任务入队 user=%d task=%s title=%q images=%d",
+		userID, enqResp.TaskID, a.Title, len(napcatImages))
+	go pollPublishTaskAndAck(key, userID, enqResp.TaskID, a, negotiable, priceCents, len(napcatImages))
+	return ackResult{Kind: ackKindIgnore}
+}
+
+// pollPublishTaskAndAck 短轮询任务状态，拿到 done/failed 后发最终 ack 到群。
+//
+// 轮询节奏：每 2s 一次；3 分钟总超时（hfut 端单图 30s + 14 张图最多 7 分钟，
+// 实际正常情况 < 60s）。超时后发"系统繁忙"ack，task 在 hfut DB 里仍可能稍后完成
+// 不影响商品最终入库。
+//
+// 仅在 done 路径才触发"反查求购者 / ops 通知"等副作用——跟同步路径语义一致。
+func pollPublishTaskAndAck(key autoReplyBucketKey, userID uint, taskID string,
+	a kimi.RecognizeAction, negotiable bool, priceCents int, srcImgCount int) {
+	deadline := time.Now().Add(3 * time.Minute)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	httpClient := client_pool.NewClientPool()
+	verbose := conf.Cfg.Group.IsAutoReplyVerbose()
+
+	for {
+		if time.Now().After(deadline) {
+			zaplog.Logger.Warnf("autoReply task 轮询超时 task=%s user=%d title=%q", taskID, userID, a.Title)
+			text := "系统繁忙，上架结果未知，请稍后到 app 我的发布 查看"
+			res := ackResult{Text: text, Kind: ackKindFail}
+			if res.shouldEmit(verbose) {
+				_ = SendGroupAtText(httpClient, key.GroupID, key.UserID, text)
+			}
+			return
+		}
+
+		pollCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		status, err := global.Hfut.GetPublishTask(pollCtx, taskID)
+		cancel()
+		if err != nil {
+			zaplog.Logger.Debugf("autoReply task 查询失败 task=%s: %v（继续轮询）", taskID, err)
+			<-ticker.C
+			continue
+		}
+
+		switch status.Status {
+		case hfut.PublishTaskDone:
+			handlePublishTaskDone(key, userID, a, negotiable, priceCents, srcImgCount, status, httpClient, verbose)
+			return
+		case hfut.PublishTaskFailed:
+			handlePublishTaskFailed(key, userID, a, status, httpClient, verbose)
+			return
+		default:
+			// queued / processing —— 继续轮询
+		}
+		<-ticker.C
+	}
+}
+
+// handlePublishTaskDone task 成功完成：发"已发布"ack + recentGood + 反查 + ops 通知。
+func handlePublishTaskDone(key autoReplyBucketKey, userID uint, a kimi.RecognizeAction,
+	negotiable bool, priceCents int, srcImgCount int,
+	status *hfut.PublishTaskStatusResp, httpClient *http.Client, verbose bool) {
+
 	category := "二手"
 	if a.Category == 2 {
 		category = "求"
 	}
 	var b strings.Builder
 	if a.IsBatch {
-		// 批量上架：直接 "批量上架 N 件商品：a，b，c。"——不带"已发布"前缀、
-		// 不带"二手"/"求"分类、不带价格（统一面议）。商品名列表直接用 title
-		// 原始内容（Kimi 已经按中文逗号串联）。
 		itemCount := batchItemCount(a.Title)
 		title := strings.TrimSpace(a.Title)
 		if itemCount > 1 {
-			fmt.Fprintf(&b, "批量上架 %d 件商品：%s。", itemCount, title)
+			fmt.Fprintf(&b, "批量上架 %d 件商品:%s。", itemCount, title)
 		} else {
-			fmt.Fprintf(&b, "批量上架商品：%s。", orPlaceholder(title, "未命名"))
+			fmt.Fprintf(&b, "批量上架商品:%s。", orPlaceholder(title, "未命名"))
 		}
 	} else {
 		b.WriteString("已发布 ")
@@ -691,19 +764,23 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 			fmt.Fprintf(&b, " × %d", a.Stock)
 		}
 	}
-	// 记录"最近一条"——给后续"不要了 / 不卖了"上下文化处理用
-	if resp != nil {
-		recentGoodMgr.Save(key, userID, resp.GoodID, strings.TrimSpace(a.Title), a.Category)
+
+	if status.GoodID != nil {
+		recentGoodMgr.Save(key, userID, *status.GoodID, strings.TrimSpace(a.Title), a.Category)
 	}
 
-	// 上架成功后异步反查"谁在求 X" —— 仅二手卖出（cat=1）场景有意义；求物品 (cat=2)
-	// 反查求物品本身没意义（用户 A 求 X, B 也求 X, 互相不能满足对方）。
+	zaplog.Logger.Infof("autoReply task 完成 task=%s user=%d good=%v title=%q",
+		status.TaskID, userID, status.GoodID, a.Title)
+
+	res := ackResult{Text: b.String(), Kind: ackKindSuccess}
+	if res.shouldEmit(verbose) {
+		_ = SendGroupAtText(httpClient, key.GroupID, key.UserID, res.Text)
+	}
+
 	if a.Category == 1 {
 		sellTitle := strings.TrimSpace(a.Title)
 		if sellTitle != "" {
 			go func() {
-				// 独立 ctx，不被本次 dispatch ctx 影响（dispatchActionToHfut 的 ctx
-				// 一般是 processSnapshot 那层的 60s，反查 + 发卡片可能超出）
 				bgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 				defer cancel()
 				matches := seekerTopMatches(bgCtx, key.GroupID, sellTitle, seekForwardMaxItems)
@@ -715,7 +792,6 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 		}
 	}
 
-	// 上架成功后异步上报运维群（不阻塞主回执）
 	opsKind := "二手"
 	if a.Category == 2 {
 		opsKind = "求物品"
@@ -738,15 +814,32 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 		opsLoc = "地点: " + a.Location
 	}
 	opsImgs := ""
-	if len(images) > 0 {
-		opsImgs = fmt.Sprintf("配图: %d 张", len(images))
+	if srcImgCount > 0 {
+		opsImgs = fmt.Sprintf("配图: %d 张", srcImgCount)
 	}
 	go NotifyOpsPublish(nil, key.GroupID, key.UserID, "", opsKind, strings.TrimSpace(a.Title),
 		opsPriceLine, opsLoc, opsImgs, fmt.Sprintf("user_id: %d", userID))
+}
 
-	return ackResult{
-		Text: b.String(),
-		Kind: ackKindSuccess,
+// handlePublishTaskFailed task 失败：发"上架失败"ack。
+func handlePublishTaskFailed(key autoReplyBucketKey, userID uint, a kimi.RecognizeAction,
+	status *hfut.PublishTaskStatusResp, httpClient *http.Client, verbose bool) {
+
+	zaplog.Logger.Errorf("autoReply task 失败 task=%s user=%d title=%q error=%q mirror=%d/%d",
+		status.TaskID, userID, a.Title, status.Error, status.MirrorDone, status.MirrorTotal)
+
+	failText := fmt.Sprintf("「%s」上架失败:图片转存失败，请稍后重发", orPlaceholder(a.Title, "这条"))
+	if a.IsBatch {
+		itemCount := batchItemCount(a.Title)
+		if itemCount > 1 {
+			failText = fmt.Sprintf("批量上架 %d 件商品失败:图片转存失败，请稍后重发", itemCount)
+		} else {
+			failText = "批量上架失败:图片转存失败，请稍后重发"
+		}
+	}
+	res := ackResult{Text: failText, Kind: ackKindFail}
+	if res.shouldEmit(verbose) {
+		_ = SendGroupAtText(httpClient, key.GroupID, key.UserID, res.Text)
 	}
 }
 
@@ -844,10 +937,15 @@ func mirrorImagesToHfut(ctx context.Context, userID uint, napcatURLs []string) [
 		return napcatURLs
 	}
 
+	start := time.Now()
+	zaplog.Logger.Infof("mirrorImagesToHfut 开始 user=%d total=%d conc=%d",
+		userID, len(napcatURLs), mirrorImagesConcurrency)
+
 	type result struct {
 		idx int
 		url string
 		err error
+		ms  int64 // 单图耗时（毫秒），用来诊断
 	}
 	jobs := make(chan int, len(napcatURLs))
 	results := make(chan result, len(napcatURLs))
@@ -862,8 +960,9 @@ func mirrorImagesToHfut(ctx context.Context, userID uint, napcatURLs []string) [
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
+				t0 := time.Now()
 				hfutURL, err := mirrorOneImage(ctx, userID, napcatURLs[idx])
-				results <- result{idx: idx, url: hfutURL, err: err}
+				results <- result{idx: idx, url: hfutURL, err: err, ms: time.Since(t0).Milliseconds()}
 			}
 		}()
 	}
@@ -878,10 +977,12 @@ func mirrorImagesToHfut(ctx context.Context, userID uint, napcatURLs []string) [
 	ordered := make([]string, len(napcatURLs))
 	for r := range results {
 		if r.err != nil {
-			zaplog.Logger.Warnf("mirrorImagesToHfut 第 %d/%d 张转存失败 user=%d url=%q: %v",
-				r.idx+1, len(napcatURLs), userID, truncateForLog(napcatURLs[r.idx], 100), r.err)
+			zaplog.Logger.Warnf("mirrorImagesToHfut 第 %d/%d 张转存失败 user=%d cost=%dms url=%q: %v",
+				r.idx+1, len(napcatURLs), userID, r.ms, truncateForLog(napcatURLs[r.idx], 100), r.err)
 			continue
 		}
+		zaplog.Logger.Debugf("mirrorImagesToHfut 第 %d/%d 张转存成功 user=%d cost=%dms",
+			r.idx+1, len(napcatURLs), userID, r.ms)
 		ordered[r.idx] = r.url
 	}
 	out := make([]string, 0, len(napcatURLs))
@@ -890,10 +991,8 @@ func mirrorImagesToHfut(ctx context.Context, userID uint, napcatURLs []string) [
 			out = append(out, u)
 		}
 	}
-	if len(out) < len(napcatURLs) {
-		zaplog.Logger.Infof("mirrorImagesToHfut 部分失败 user=%d: %d/%d 成功",
-			userID, len(out), len(napcatURLs))
-	}
+	zaplog.Logger.Infof("mirrorImagesToHfut 完成 user=%d %d/%d 成功 总耗时=%s",
+		userID, len(out), len(napcatURLs), time.Since(start))
 	return out
 }
 
@@ -911,22 +1010,65 @@ func mirrorImagesToHfut(ctx context.Context, userID uint, napcatURLs []string) [
 // 单独抽出来是为了让 mirrorImagesToHfut 的循环逻辑清晰；每张图用独立 ctx
 // 控制超时，一张失败不影响其它。
 func mirrorOneImage(parent context.Context, userID uint, srcURL string) (string, error) {
-	// 优先走新链路（hfut 直接拉 NapCat URL）
-	mirrorCtx, mirrorCancel := context.WithTimeout(parent, 90*time.Second)
+	// 优先走新链路（hfut 直接拉 NapCat URL）。
+	//
+	// 超时设 45s：保留充足余量给 hfut 端完成拉源 URL + OSS 上传（hfut 端整体超时
+	// 30s），同时小于 nginx 默认 proxy_read_timeout 60s——这样如果 hfut 端真的慢，
+	// bot 主动放弃比 nginx 504 更快进入 fallback，省时间。
+	mirrorCtx, mirrorCancel := context.WithTimeout(parent, 45*time.Second)
 	defer mirrorCancel()
 	resp, err := global.Hfut.MirrorImage(mirrorCtx, userID, srcURL)
 	if err == nil {
 		return resp.URL, nil
 	}
-	// 502 = hfut 拉源 URL 失败 → 走老 multipart 上传链路兜底
-	var ce *hfut.ClientError
-	if errors.As(err, &ce) && ce.HTTPStatus == 502 {
-		zaplog.Logger.Infof("mirrorOneImage 新链路 502 回退 multipart user=%d url=%q: %s",
-			userID, truncateForLog(srcURL, 100), ce.Message)
+	// 新链路失败 → 走老 multipart 上传链路兜底。触发条件：
+	//   - 502 = hfut 报 ErrBotMirrorURLUnreachable（拉源 URL 失败）
+	//   - 504 = nginx 等不到 hfut 响应（hfut 端处理慢）
+	//   - context deadline exceeded = bot 自己 45s ctx 超时（hfut 端没及时回）
+	//   - 503 / EOF / connection reset = 各种瞬态错
+	// 共同特征：**新链路撞墙**，但 bot 自己有能力拉 NapCat URL（rkey 对 bot 有效）。
+	// 走老链路 multipart 上传保证最终能落地。
+	if shouldFallbackToLegacy(err) {
+		zaplog.Logger.Infof("mirrorOneImage 新链路失败回退 multipart user=%d url=%q: %v",
+			userID, truncateForLog(srcURL, 80), err)
 		return mirrorOneImageLegacy(parent, userID, srcURL)
 	}
-	// 其它错（4xx 业务错 / 网络问题）不轻易回退——回退也大概率失败。直接报错。
+	// 其它错（4xx 业务错 / 拉源真不可达）不轻易回退——回退也大概率失败。直接报错。
 	return "", err
+}
+
+// shouldFallbackToLegacy 判定新链路（hfut mirror）的错误是否值得回退老 multipart 路径。
+//
+// 网关层 / hfut 端瞬态错都视为可回退（bot 自己跑老路径很可能成功）。业务层 4xx
+// （400/404/413 等）不回退——回退也大概率撞同样的业务错。
+func shouldFallbackToLegacy(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ce *hfut.ClientError
+	if errors.As(err, &ce) {
+		switch ce.HTTPStatus {
+		case 502, 503, 504:
+			return true
+		}
+		return false
+	}
+	// 非 ClientError：网络层 / ctx 超时——大多是瞬态
+	s := err.Error()
+	for _, kw := range []string{
+		"context deadline exceeded",
+		"timeout",
+		"EOF",
+		"connection reset",
+		"connection refused",
+		"broken pipe",
+		"i/o timeout",
+	} {
+		if strings.Contains(s, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // mirrorOneImageLegacy bot 端自己下载图 + multipart 上传到 hfut 的老链路。
