@@ -897,16 +897,46 @@ func mirrorImagesToHfut(ctx context.Context, userID uint, napcatURLs []string) [
 	return out
 }
 
-// mirrorOneImage 单张图的转存：下载 → (超出 10MB 时压缩) → 推断扩展名 → 上传。
+// mirrorOneImage 单张图的转存。
 //
-// 单独抽出来是为了让 mirrorImagesToHfut 的循环逻辑清晰；并且每张图用独立 ctx
+// 优先链路（新）：bot 只把 NapCat 临时 URL POST 给 hfut，hfut 自己拉源 URL +
+// 推七牛 + 返回永久 URL。优势：bot 端**不需要**下载 + multipart 上传 1-5MB 数据，
+// 单图请求 < 1KB；省掉 bot → hfut 公网 multipart 转发这一程（典型场景一次批量
+// 上架 14 张图 = 省 ~20MB 出向带宽）。
+//
+// 回退链路（老）：hfut 端拉源 URL 失败（rkey 对 hfut server IP 无效 / 临时网络
+// 抖动）→ HTTP 502，bot 改走"自己下载 + multipart 上传"老路径。这条路径已经过
+// 测试稳定，作为安全网兜底——即便新链路出现意外失败也能保证图片转存成功。
+//
+// 单独抽出来是为了让 mirrorImagesToHfut 的循环逻辑清晰；每张图用独立 ctx
 // 控制超时，一张失败不影响其它。
-//
-// 超大图处理：原始下载允许到 mirrorImageDownloadMaxBytes（50MB），下载后如果
-// size > mirrorImageMaxBytes（10MB）走 compressImageToLimit 在本地压缩——优先
-// JPEG quality 递减，再不行就缩分辨率，尽量保持画质。这样 iPhone 4K / RAW 等
-// 大图也能正常上架；只有真正畸形大（>50MB）才会被拒收。
 func mirrorOneImage(parent context.Context, userID uint, srcURL string) (string, error) {
+	// 优先走新链路（hfut 直接拉 NapCat URL）
+	mirrorCtx, mirrorCancel := context.WithTimeout(parent, 90*time.Second)
+	defer mirrorCancel()
+	resp, err := global.Hfut.MirrorImage(mirrorCtx, userID, srcURL)
+	if err == nil {
+		return resp.URL, nil
+	}
+	// 502 = hfut 拉源 URL 失败 → 走老 multipart 上传链路兜底
+	var ce *hfut.ClientError
+	if errors.As(err, &ce) && ce.HTTPStatus == 502 {
+		zaplog.Logger.Infof("mirrorOneImage 新链路 502 回退 multipart user=%d url=%q: %s",
+			userID, truncateForLog(srcURL, 100), ce.Message)
+		return mirrorOneImageLegacy(parent, userID, srcURL)
+	}
+	// 其它错（4xx 业务错 / 网络问题）不轻易回退——回退也大概率失败。直接报错。
+	return "", err
+}
+
+// mirrorOneImageLegacy bot 端自己下载图 + multipart 上传到 hfut 的老链路。
+//
+// 仅在新链路 mirrorOneImage 拿到 502（hfut 拉源 URL 失败）时被调用，作为兜底——
+// 这种情况下 bot 至少能拉到图（因为 NapCat rkey 对 bot IP 有效），再 multipart
+// 上传到 hfut，绕过 hfut server IP 鉴权问题。
+//
+// 流程：下载 → (超 10MB 时压缩) → 推断扩展名 → multipart 上传 → 拿永久 URL。
+func mirrorOneImageLegacy(parent context.Context, userID uint, srcURL string) (string, error) {
 	dlCtx, cancel := context.WithTimeout(parent, mirrorImageDownloadTimeout)
 	defer cancel()
 

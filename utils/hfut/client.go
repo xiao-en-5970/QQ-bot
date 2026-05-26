@@ -625,6 +625,36 @@ type UploadImageResp struct {
 	URL string `json:"url"`
 }
 
+// MirrorImageReq 走 hfut "拉源 URL → 上传 OSS" 的轻量接口。
+type MirrorImageReq struct {
+	UserID uint   `json:"user_id"`
+	SrcURL string `json:"src_url"`
+}
+
+// MirrorImage 让 hfut 服务器自己从 NapCat 临时 URL 拉图 + 上传到 OSS，返回永久 URL。
+//
+// 跟 UploadImage 的差别：bot 端**不需要**下载图 + multipart 上传 21MB，只发轻量
+// JSON 请求（< 1KB）。hfut 端工作量跟之前一样（拉 CDN + 推七牛），但少了 bot →
+// hfut 这一程公网 multipart 转发——bot 公网出口带宽不再是瓶颈。
+//
+// 失败语义：
+//
+//   - HTTP 502 = hfut 拉源 URL 失败（rkey 失效 / IP 鉴权拒绝 / 临时网络抖动）。
+//     调用方应当**回退**到 UploadImage（先 bot 下载再 multipart 上传）。这里仍
+//     用 ClientError 暴露，让上层 errors.As 检测 HTTPStatus==502 做兜底。
+//   - 413 = 图片超过 50MB 上限。
+//   - 其它跟 UploadImage 一致。
+func (c *Client) MirrorImage(ctx context.Context, userID uint, srcURL string) (*UploadImageResp, error) {
+	var out UploadImageResp
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/bot/images/mirror", &MirrorImageReq{
+		UserID: userID,
+		SrcURL: srcURL,
+	}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // UploadImage 把一张图（NapCat 临时 URL 下载后的二进制）上传到 hfut OSS，返回永久 URL。
 //
 // 参数：
