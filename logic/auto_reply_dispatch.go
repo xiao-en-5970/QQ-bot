@@ -679,15 +679,18 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 
 // pollPublishTaskAndAck 短轮询任务状态，拿到 done/failed 后发最终 ack 到群。
 //
-// 轮询节奏：每 2s 一次；3 分钟总超时（hfut 端单图 30s + 14 张图最多 7 分钟，
-// 实际正常情况 < 60s）。超时后发"系统繁忙"ack，task 在 hfut DB 里仍可能稍后完成
-// 不影响商品最终入库。
+// 轮询节奏：每 3s 一次；15 分钟总超时。
+//
+// 为什么 15 分钟：hfut 端 worker 串行处理，单图最坏 60s × 2 retry = 120s；20 张
+// 极端批量上架耗时约 20 × 60s = 20 分钟（罕见，正常 < 60s 完成）。给 15 分钟兜底
+// 几乎能覆盖所有正常场景；真的超过 15 分钟说明 OSS 端有大故障，bot 提示用户重试。
+// 注意：超时后 task 在 hfut DB 里仍可能稍后完成，并不影响商品最终入库。
 //
 // 仅在 done 路径才触发"反查求购者 / ops 通知"等副作用——跟同步路径语义一致。
 func pollPublishTaskAndAck(key autoReplyBucketKey, userID uint, taskID string,
 	a kimi.RecognizeAction, negotiable bool, priceCents int, srcImgCount int) {
-	deadline := time.Now().Add(3 * time.Minute)
-	ticker := time.NewTicker(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Minute)
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
 	httpClient := client_pool.NewClientPool()
