@@ -47,12 +47,37 @@ jobs:
           go-version: "1.22"
           cache: false
 
-      - name: 编译 Linux 二进制（部署机只 COPY 进镜像，无需 Go）
+      - name: 编译 Linux 二进制
         run: |
           mkdir -p build
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o build/app .
 
-      - name: 同步代码并在部署机构建、启动
+      # 在 GitHub Actions runner（云端 2vCPU/7GB 免费）上做完整 docker build——
+      # 让部署机彻底不参与 build，避免 apt-get install / pip install jmcomic 把
+      # 4GB 部署机打满（曾导致 sshd 心跳被压死 → SSH client_loop disconnect）。
+      #
+      # build_arg 显式传国际源（archive.ubuntu.com / pypi.org），让 runner 走最快路径；
+      # Dockerfile 默认的 mirrors.aliyun.com 是面向国内部署机优化的，在 runner 上反而慢。
+      #
+      # docker save 输出整个镜像 (含 ubuntu base + python + pip 依赖 + Go binary)，
+      # 用 gzip -1 轻量压缩（速度 > 压缩率，避免占用 runner CPU 太久），单文件 ~250MB。
+      - name: 在 runner 构建 Docker 镜像并保存为 tar
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          export DOCKER_BUILDKIT=1
+          docker build \
+            --build-arg APT_MIRROR=archive.ubuntu.com \
+            --build-arg PIP_INDEX_URL=https://pypi.org/simple/ \
+            --build-arg PIP_TRUSTED_HOST=pypi.org \
+            -t "qq-bot-server:${TAG}" -t qq-bot-server:latest \
+            -f Dockerfile .
+          docker save qq-bot-server:${TAG} qq-bot-server:latest | gzip -1 > qq-bot-server.tar.gz
+          echo "[runner] 镜像 tar 体积："
+          ls -lh qq-bot-server.tar.gz
+
+      - name: 同步镜像 tar 到部署机并切换容器（部署机仅 load + run，不做 build）
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -89,16 +114,15 @@ jobs:
           REMOTE_DEST=$(printf '%s' "$REMOTE_DEST" | tr -d '\r\n')
           echo "远程目录: $REMOTE_DEST"
 
-          echo "[2/3] rsync（含 build/app 与 Dockerfile）..."
+          echo "[2/3] rsync 镜像 tar（约 250MB）到部署机..."
           "${SSH_BASE[@]}" "mkdir -p $(printf '%q' "$REMOTE_DEST")"
-          rsync -az --delete \
+          # 只传镜像 tar——部署机不再需要 Dockerfile / build/app / package/jmoption
+          # 这些都已经打进镜像。--partial 让中断的传输可续传（GH→部署机偶发抖动时少重传）。
+          rsync -av --partial --inplace \
             -e "$RSYNC_RSH" \
-            --exclude '.git' \
-            --exclude '.github' \
-            --exclude 'package/*.exe' \
-            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DEST}/"
+            qq-bot-server.tar.gz "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DEST}/qq-bot-server.tar.gz"
 
-          echo "[3/3] docker build（仅打包预编译二进制 + Python 工具，部署机本地缓存层）并启动..."
+          echo "[3/3] 部署机 docker load + 切换容器（不再做 build，资源占用降到最小）..."
           "${SSH_BASE[@]}" bash -s << EOF
           set -e
           DEST="\${DEPLOY_PATH:-\$HOME/qq-bot-server}"
@@ -115,9 +139,14 @@ jobs:
           mkdir -p /qq-bot-server/cache/jm /qq-bot-server/cache/pdf /qq-bot-server/cache/logs
           chmod -R 755 /qq-bot-server/cache
 
-          export DOCKER_BUILDKIT=1
-          docker build -t "qq-bot-server:${TAG}" -t qq-bot-server:latest -f Dockerfile .
+          # docker load：从 rsync 过来的 tar 加载到本地 image cache。
+          # 这步只是磁盘 IO + tar 解压（gzip），单核 CPU 短时占用、内存占用 <100MB，
+          # 不再像 apt+pip 那样烧 1GB+ 内存——这正是方案 1 的意义。
+          # 旧 qq-bot-server 容器**保持运行**，直到下方 docker stop 才停。
+          echo "[deploy] docker load < qq-bot-server.tar.gz ..."
+          gunzip -c qq-bot-server.tar.gz | docker load
 
+          # 切换窗口：stop 旧 → rm → run 新，整段 < 5 秒
           docker stop qq-bot-server 2>/dev/null || true
           docker rm qq-bot-server 2>/dev/null || true
 
