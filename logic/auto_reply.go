@@ -167,14 +167,14 @@ func (m *autoReplyManager) pushInternal(groupID, userID int64, userCard string,
 	// （即便用户没触发业务动作）。详见 display_sync.go。
 	maybeSyncQQDisplay(groupID, userID, userCard)
 
-	// 60s 滑动窗口：丢弃桶里超过 windowSeconds 之前的旧消息。
+	// 300s 滑动窗口：丢弃桶里超过 windowSeconds 之前的旧消息。
 	//
 	// 跟 silence 是不同概念——silence 看"最近一条消息以来的静默时间"决定 flush 时机；
 	// 滑动窗口看"每条消息自身的年龄"决定它是否还在视野里。目的是防止"用户半小时前发
 	// 的图 + 现在发的文字"被识别成同一上架，引入跨上下文误判。
 	windowSec := conf.Cfg.Group.AutoReplyWindowSeconds
 	if windowSec <= 0 {
-		windowSec = 60
+		windowSec = 300
 	}
 	cutoff := now.Add(-time.Duration(windowSec) * time.Second)
 	keepFrom := 0
@@ -228,7 +228,7 @@ func (m *autoReplyManager) pushInternal(groupID, userID int64, userCard string,
 		return
 	}
 
-	// 不再做 unit 切分立即 flush：所有消息攒在桶里，等 60s 沉默触发后 scanOnce 整桶
+	// 不再做 unit 切分立即 flush：所有消息攒在桶里，等 300s 沉默触发后 scanOnce 整桶
 	// 一次性送 Kimi 识别。
 	//
 	// 这是一次设计权衡：早期版本会按"图 图 图 文 → 立即闭合"的模式提前 flush，让用户
@@ -249,7 +249,7 @@ func (m *autoReplyManager) pushInternal(groupID, userID int64, userCard string,
 func (m *autoReplyManager) scanOnce() {
 	silenceSec := conf.Cfg.Group.AutoReplyWindowSeconds
 	if silenceSec <= 0 {
-		silenceSec = 60
+		silenceSec = 300
 	}
 	threshold := time.Duration(silenceSec) * time.Second
 	now := time.Now()
@@ -688,7 +688,7 @@ func normalizeBatchContent(s string) string {
 // 跟其它后台协程同源（避免之前那个 Wg.Wait race）。
 //
 // 实现：5s 一次 tick，每次扫一遍 buckets 决定 flush。
-// 5s 这个周期相对于 60s 沉默窗口足够细，不会让 flush 多延迟太多。
+// 5s 这个周期相对于 300s 沉默窗口足够细，不会让 flush 多延迟太多。
 func StartAutoReplyScanner(ctx context.Context, _ *http.Client) {
 	defer global.Wg.Done()
 	zaplog.Logger.Debugf("协程AutoReplyScanner启动")

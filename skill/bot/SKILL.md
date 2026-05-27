@@ -107,7 +107,7 @@
 | env | 作用 | 默认 |
 |---|---|---|
 | `GROUP_AUTO_REPLY_WHITELIST` | 启用自动监听的群号（逗号分隔） | 空 |
-| `BOT_AUTO_REPLY_WINDOW_SECONDS` | 同一发送者沉默 N 秒后触发窗口 | 60 |
+| `BOT_AUTO_REPLY_WINDOW_SECONDS` | 同一发送者沉默 N 秒后触发窗口 | 300 |
 | `BOT_AUTO_REPLY_MAX_WINDOW_SIZE` | 同一窗口最多攒多少条（防超长） | 20 |
 | `GROUP_AUTO_REPLY_VERBOSITY` | 自动回复模式：`verbose` / `normal`（详见 `verbosity.md`） | verbose |
 | `COMMANDS_ENABLED` | 启用的子命令（白名单） | 空 = 全禁用 |

@@ -20,12 +20,12 @@
 bot 必须把第 1 张图绑给"鞋架"、第 3 张图绑给"U型枕"。规则：
 
 - **per-(group, user) 滑动窗口**——每个 (群, 发送者) 各自一个独立桶
-- **沉默 60s 触发**（可配置，env `BOT_AUTO_REPLY_WINDOW_SECONDS`，默认 60）
+- **沉默 300s 触发**（可配置，env `BOT_AUTO_REPLY_WINDOW_SECONDS`，默认 300）
 - 同桶内消息合并成一段上下文，整段交给 Kimi
 - Kimi 一次返回 N 个动作（可能 0、可能多个），包含图文配对（image_message_ids）
 - 多个发送者交错时**严格按发送者分桶**，不混
 
-**早期"unit 切分立即 flush"机制已废弃**：以前桶里出现"图 图 图 文" 模式会立刻切出一个 unit 提前 flush，目的是让上架回执秒回。实际场景里用户在一次发布中常常图文交杂（图 图 图 视频 商品描述长文 图 价格），早期切分会在第一段文字处截止把后续价格切到下一个 unit 误识别，所以现在所有消息都攒在桶里等 60s 沉默后整体识别。`splitBucketIntoUnits` 函数已移除；只保留 `bucketHasMeaningfulText`——scanOnce 用它选走 Kimi（有文字）还是走 vision OCR（纯图）。
+**早期"unit 切分立即 flush"机制已废弃**：以前桶里出现"图 图 图 文" 模式会立刻切出一个 unit 提前 flush，目的是让上架回执秒回。实际场景里用户在一次发布中常常图文交杂（图 图 图 视频 商品描述长文 图 价格），早期切分会在第一段文字处截止把后续价格切到下一个 unit 误识别，所以现在所有消息都攒在桶里等 300s 沉默后整体识别。`splitBucketIntoUnits` 函数已移除；只保留 `bucketHasMeaningfulText`——scanOnce 用它选走 Kimi（有文字）还是走 vision OCR（纯图）。
 
 回执延迟代价：上架后约 60s 才回执，但识别准确率显著提升，特别是这类复杂格式：
 

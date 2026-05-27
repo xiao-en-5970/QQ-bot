@@ -31,7 +31,6 @@ import (
 	_ "image/png" // PNG 自动解码注册
 	"io"
 	"net/http"
-	"qq_bot/conf"
 	"qq_bot/global"
 	"qq_bot/model"
 	"qq_bot/utils/client_pool"
@@ -258,10 +257,8 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 			}
 		}
 		zaplog.Logger.Errorf("autoReply seek_goods PublishGood 失败 user=%d title=%q: %v", userID, title, pubErr)
-		return ackResult{
-			Text: fmt.Sprintf("求物品「%s」未发出，稍后再试", title),
-			Kind: ackKindFail,
-		}
+		// 产品策略：上架/求物品的回执只走运维群，不在群内打扰用户。详见包头注释。
+		return ackResult{Kind: ackKindIgnore}
 	}
 
 	// 记录"最近一条"——求物品也按 cat=2 落到 recentGoodMgr，后续"不要了"可定位
@@ -273,10 +270,10 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 	go NotifyOpsPublish(nil, key.GroupID, key.UserID, "", "求物品(无价/求购)", title,
 		fmt.Sprintf("发起人 user_id: %d", userID))
 
-	return ackResult{
-		Text: fmt.Sprintf("已发布 求「%s」", title),
-		Kind: ackKindSuccess,
-	}
+	// 产品策略：求物品发布成功后**不**在群里发"已发布"反馈——bot 在群里的价值
+	// 体现在"找历史匹配"那张合并转发卡片上（上面已 go sendSeekMatchForwardCard
+	// 发完）。落库 + 运维群通知足以闭环；群内静默。
+	return ackResult{Kind: ackKindIgnore}
 }
 
 // seekForwardMaxItems 合并转发卡片里最多列几个匹配项（商品 / 求购者都按此上限）。
@@ -652,21 +649,8 @@ func dispatchPublishGood(ctx context.Context, key autoReplyBucketKey, userID uin
 			}
 		}
 		zaplog.Logger.Errorf("autoReply hfut PublishGoodAsync 失败 user=%d title=%q: %v", userID, a.Title, err)
-		// 批量上架失败时 title 是 N 个商品名串联（可能上百字），群里贴这种长串体验差——
-		// 单独走简短文案。
-		failText := fmt.Sprintf("「%s」未发出，稍后再试", orPlaceholder(a.Title, "这条"))
-		if a.IsBatch {
-			itemCount := batchItemCount(a.Title)
-			if itemCount > 1 {
-				failText = fmt.Sprintf("批量上架 %d 件商品未发出，稍后再试", itemCount)
-			} else {
-				failText = "批量上架未发出，稍后再试"
-			}
-		}
-		return ackResult{
-			Text: failText,
-			Kind: ackKindFail,
-		}
+		// 产品策略：上架失败也不在群里打扰用户，仅落日志；详见包头注释。
+		return ackResult{Kind: ackKindIgnore}
 	}
 
 	// 入队成功——启轮询协程异步等结果。返回 ackKindIgnore 让 processSnapshot 不发
@@ -693,17 +677,12 @@ func pollPublishTaskAndAck(key autoReplyBucketKey, userID uint, taskID string,
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
-	httpClient := client_pool.NewClientPool()
-	verbose := conf.Cfg.Group.IsAutoReplyVerbose()
-
 	for {
 		if time.Now().After(deadline) {
+			// 产品策略：上架超时也不在群里打扰用户，仅落日志和运维通知（运维通知由
+			// handlePublishTaskFailed 路径不发，这里超时则单独 warn 即可——运维会从
+			// hfut 端 task 表上看到 stuck）。
 			zaplog.Logger.Warnf("autoReply task 轮询超时 task=%s user=%d title=%q", taskID, userID, a.Title)
-			text := "系统繁忙，上架结果未知，请稍后到 app 我的发布 查看"
-			res := ackResult{Text: text, Kind: ackKindFail}
-			if res.shouldEmit(verbose) {
-				_ = SendGroupAtText(httpClient, key.GroupID, key.UserID, text)
-			}
 			return
 		}
 
@@ -718,10 +697,10 @@ func pollPublishTaskAndAck(key autoReplyBucketKey, userID uint, taskID string,
 
 		switch status.Status {
 		case hfut.PublishTaskDone:
-			handlePublishTaskDone(key, userID, a, negotiable, priceCents, srcImgCount, status, httpClient, verbose)
+			handlePublishTaskDone(key, userID, a, negotiable, priceCents, srcImgCount, status)
 			return
 		case hfut.PublishTaskFailed:
-			handlePublishTaskFailed(key, userID, a, status, httpClient, verbose)
+			handlePublishTaskFailed(key, userID, a, status)
 			return
 		default:
 			// queued / processing —— 继续轮询
@@ -730,43 +709,16 @@ func pollPublishTaskAndAck(key autoReplyBucketKey, userID uint, taskID string,
 	}
 }
 
-// handlePublishTaskDone task 成功完成：发"已发布"ack + recentGood + 反查 + ops 通知。
+// handlePublishTaskDone task 成功完成：recentGood + 反查求购者 + 运维群通知。
+//
+// **产品策略**：上架成功**不**在群里发"已发布"反馈——bot 的核心价值是"上架/求物
+// 品时找历史匹配做信息打通"，匹配命中由 sendSellerMatchForwardCard 走单独的合并
+// 转发卡片发出（卡片自身已经包含上架内容上下文，足够替代"已发布"回执）。
+// 没匹配上的次数远多于匹配上的，每次都在群里 @ 用户报"已发布"反而是噪音。
+// recentGoodMgr 落库 + 运维群通知足以闭环。
 func handlePublishTaskDone(key autoReplyBucketKey, userID uint, a kimi.RecognizeAction,
 	negotiable bool, priceCents int, srcImgCount int,
-	status *hfut.PublishTaskStatusResp, httpClient *http.Client, verbose bool) {
-
-	category := "二手"
-	if a.Category == 2 {
-		category = "求"
-	}
-	var b strings.Builder
-	if a.IsBatch {
-		itemCount := batchItemCount(a.Title)
-		title := strings.TrimSpace(a.Title)
-		if itemCount > 1 {
-			fmt.Fprintf(&b, "批量上架 %d 件商品:%s。", itemCount, title)
-		} else {
-			fmt.Fprintf(&b, "批量上架商品:%s。", orPlaceholder(title, "未命名"))
-		}
-	} else {
-		b.WriteString("已发布 ")
-		b.WriteString(category)
-		b.WriteString("「")
-		b.WriteString(orPlaceholder(a.Title, "未命名"))
-		b.WriteString("」")
-		switch {
-		case negotiable:
-			b.WriteString(" 面议")
-		case priceCents > 0:
-			fmt.Fprintf(&b, " %g 元", float64(priceCents)/100)
-			if a.Category == 2 {
-				b.WriteString("（有偿）")
-			}
-		}
-		if a.Stock > 1 {
-			fmt.Fprintf(&b, " × %d", a.Stock)
-		}
-	}
+	status *hfut.PublishTaskStatusResp) {
 
 	if status.GoodID != nil {
 		recentGoodMgr.Save(key, userID, *status.GoodID, strings.TrimSpace(a.Title), a.Category)
@@ -775,11 +727,8 @@ func handlePublishTaskDone(key autoReplyBucketKey, userID uint, a kimi.Recognize
 	zaplog.Logger.Infof("autoReply task 完成 task=%s user=%d good=%v title=%q",
 		status.TaskID, userID, status.GoodID, a.Title)
 
-	res := ackResult{Text: b.String(), Kind: ackKindSuccess}
-	if res.shouldEmit(verbose) {
-		_ = SendGroupAtText(httpClient, key.GroupID, key.UserID, res.Text)
-	}
-
+	// 反查求购者：只对真正上架的二手（cat=1）做；求物品（cat=2）由 dispatchSeekGoods
+	// 那一侧已经反查在售卖家了，不重复。
 	if a.Category == 1 {
 		sellTitle := strings.TrimSpace(a.Title)
 		if sellTitle != "" {
@@ -824,26 +773,20 @@ func handlePublishTaskDone(key autoReplyBucketKey, userID uint, a kimi.Recognize
 		opsPriceLine, opsLoc, opsImgs, fmt.Sprintf("user_id: %d", userID))
 }
 
-// handlePublishTaskFailed task 失败：发"上架失败"ack。
+// handlePublishTaskFailed task 失败：仅落 error log + 运维通知；**不**在群里发失败提示。
 func handlePublishTaskFailed(key autoReplyBucketKey, userID uint, a kimi.RecognizeAction,
-	status *hfut.PublishTaskStatusResp, httpClient *http.Client, verbose bool) {
+	status *hfut.PublishTaskStatusResp) {
 
 	zaplog.Logger.Errorf("autoReply task 失败 task=%s user=%d title=%q error=%q mirror=%d/%d",
 		status.TaskID, userID, a.Title, status.Error, status.MirrorDone, status.MirrorTotal)
 
-	failText := fmt.Sprintf("「%s」上架失败:图片转存失败，请稍后重发", orPlaceholder(a.Title, "这条"))
-	if a.IsBatch {
-		itemCount := batchItemCount(a.Title)
-		if itemCount > 1 {
-			failText = fmt.Sprintf("批量上架 %d 件商品失败:图片转存失败，请稍后重发", itemCount)
-		} else {
-			failText = "批量上架失败:图片转存失败，请稍后重发"
-		}
-	}
-	res := ackResult{Text: failText, Kind: ackKindFail}
-	if res.shouldEmit(verbose) {
-		_ = SendGroupAtText(httpClient, key.GroupID, key.UserID, res.Text)
-	}
+	// 上架失败也走运维通知（让运维群能感知失败率），但**不**在用户所在群里打扰用户。
+	// 用户在 app 里看不到自己的"我的发布"会自然重发；群里少一条 bot 失败消息更干净。
+	go NotifyOpsPublish(nil, key.GroupID, key.UserID, "", "上架失败",
+		strings.TrimSpace(a.Title),
+		fmt.Sprintf("error: %s", status.Error),
+		fmt.Sprintf("mirror: %d/%d", status.MirrorDone, status.MirrorTotal),
+		fmt.Sprintf("user_id: %d", userID))
 }
 
 // imageURLsFromSnap 按 message_id 在 snap 里找回原 segments，提取图片 URL（NapCat 临时 URL）。

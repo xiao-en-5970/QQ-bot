@@ -131,7 +131,12 @@ type Log struct {
 // AutoReplyWindowSeconds 自动监听窗口的"沉默触发"秒数。
 //
 //	per-(group, user) 滑动窗口内，最后一条消息距今超过这个秒数就把整段交给 LLM 判定。
-//	默认 60 秒。详见 skill/bot/SKILL.md 的"窗口聚合"章节。
+//	默认 300 秒（5 分钟）。详见 skill/bot/SKILL.md 的"窗口聚合"章节。
+//
+//	历史上默认 60s；实际场景里用户在一个上架会话里会断断续续发图 + 文字 + 补充
+//	价格 + 重新换图，3-5 分钟才发完是常见节奏。60s 太短会把同一上架切成多份
+//	snapshot 给 Kimi，识别成多件商品（其实是同一件）造成去重撞重 / 价格漂移。
+//	300s 大幅降低这种误切分。
 //
 // AutoReplyMaxWindowSize 单个窗口里允许攒多少条消息，超过就强制 flush（防止异常情况下一直攒不结算）。
 //
@@ -855,9 +860,10 @@ func applyDefaults(c *Config) {
 		c.Gpt.QuotaErrorThreshold = 3
 	}
 
-	// 自动监听窗口默认值：60 秒沉默触发、单窗口最多 20 条
+	// 自动监听窗口默认值：300 秒沉默触发（5 分钟）、单窗口最多 20 条。
+	// 详见 AutoReplyWindowSeconds 字段文档为什么从 60s 改到 300s。
 	if c.Group.AutoReplyWindowSeconds <= 0 {
-		c.Group.AutoReplyWindowSeconds = 60
+		c.Group.AutoReplyWindowSeconds = 300
 	}
 	if c.Group.AutoReplyMaxWindowSize <= 0 {
 		c.Group.AutoReplyMaxWindowSize = 20

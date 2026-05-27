@@ -311,7 +311,7 @@ func expandAndPushForward(msg *model.Message) {
 	zaplog.Logger.Infof("forward 展开 group=%d msgid=%d nodes=%d cost=%s",
 		msg.GroupID, msg.MessageID, len(expanded), time.Since(start))
 
-	// Push 入桶后等 60s 沉默才整体送 Kimi 识别。整段聊天记录用 PushBatchFromForward
+	// Push 入桶后等 300s 沉默才整体送 Kimi 识别。整段聊天记录用 PushBatchFromForward
 	// **一次过**——避免被桶的 maxSize=20 上限切碎（30 节点的聊天记录如果逐条 push
 	// 会在第 20 条触发 size flush、剩下 10 条变成第二个 snapshot，那样 Kimi 就会把
 	// 一段聊天记录识别成两个独立的批量上架，违背语义）。详见 recognizeSystemPrompt
