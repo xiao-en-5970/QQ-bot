@@ -695,6 +695,67 @@ func (c *Client) RunAdminSQL(ctx context.Context, sqlStr string, limit int) (*Ad
 	return &out, nil
 }
 
+// FetchPublicSchema 跑一次 information_schema 查询，把 public schema 的所有表/列/类型
+// 整理成"表(列1[type1], 列2[type2], ...)"格式的多行字符串，供 LLM 生 SQL 时参考。
+//
+// 用途：跟 utils/kimi/schema_cache.go 配合——bot 每 1h 拉一次，注入到 GenerateOpsSQL
+// 的 system prompt，让 LLM 看到的 schema 永远是生产库的实时版本，不会因为运维同事
+// 改表后忘记同步 prompt 常量而导致 LLM 用过时列名。
+//
+// 实现：复用 RunAdminSQL（已开 SELECT 白名单，且 hfut 端注释明确"information_schema
+// 不阻断"）。500 行硬上限——public schema 几十张表 × 平均 20 列约 600 行，留点缓冲。
+//
+// 失败：透传 RunAdminSQL 的网络/权限错误，由调用方决定是退化到硬编码 schema 还是重试。
+func (c *Client) FetchPublicSchema(ctx context.Context) (string, error) {
+	const q = `SELECT table_name, column_name, data_type 
+FROM information_schema.columns 
+WHERE table_schema = 'public' 
+ORDER BY table_name, ordinal_position`
+	res, err := c.RunAdminSQL(ctx, q, 1000)
+	if err != nil {
+		return "", err
+	}
+	if res == nil || len(res.Rows) == 0 {
+		return "", nil
+	}
+	// 按 table_name group，输出格式："table(col1[type], col2[type], ...)\n"
+	type colDef struct {
+		name string
+		typ  string
+	}
+	grouped := make(map[string][]colDef)
+	order := make([]string, 0, 32)
+	for _, row := range res.Rows {
+		if len(row) < 3 {
+			continue
+		}
+		tbl, _ := row[0].(string)
+		col, _ := row[1].(string)
+		typ, _ := row[2].(string)
+		if tbl == "" || col == "" {
+			continue
+		}
+		if _, ok := grouped[tbl]; !ok {
+			order = append(order, tbl)
+		}
+		grouped[tbl] = append(grouped[tbl], colDef{name: col, typ: typ})
+	}
+	var b strings.Builder
+	b.WriteString("<实时 schema (information_schema.columns @ public, 自动同步)>\n")
+	for _, tbl := range order {
+		fmt.Fprintf(&b, "%s(", tbl)
+		for i, c := range grouped[tbl] {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(&b, "%s[%s]", c.name, c.typ)
+		}
+		b.WriteString(")\n")
+	}
+	b.WriteString("</实时 schema>")
+	return b.String(), nil
+}
+
 // UploadImageResp 转存图片成功后 hfut 返回的永久 URL。
 type UploadImageResp struct {
 	URL string `json:"url"`

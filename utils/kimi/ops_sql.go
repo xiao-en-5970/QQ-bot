@@ -135,18 +135,33 @@ const opsSQLSystemPrompt = `你是一名"只读 SQL 助手"，根据运维同事
 输出严格 JSON（无 markdown 围栏、无解释）：{"sql": "<纯 SELECT 语句>"}`
 
 // buildOpsSQLMessages 按 cache 命中与否构造 ops_sql 调用的 messages 序列。
+//
+// 实时 schema 注入：从 liveSchemaCache 拿一份"information_schema 快照"作为**单独的
+// user 消息**前置——而不是拼进 system prompt。这样 system prompt 哈希不变，Context
+// Cache 持续命中（每次省几千 token 的 schema 摘要）；实时 schema 每次随 user 消息
+// 重新发，不影响 cache 但能让 LLM 看到生产库的最新列名。
+//
+// 实时 schema 为空（启动后首拉未完 / 一直失败）→ 退化到纯硬编码 schema（system prompt 内）。
 func buildOpsSQLMessages(cacheID, question string) []*moonshot.ChatCompletionsMessage {
-	userContent := "运维问题：" + question
+	msgs := make([]*moonshot.ChatCompletionsMessage, 0, 4)
 	if cacheID != "" {
-		return []*moonshot.ChatCompletionsMessage{
-			cacheReferenceMessage(cacheID),
-			{Role: moonshot.RoleUser, Content: userContent},
+		msgs = append(msgs, cacheReferenceMessage(cacheID))
+	} else {
+		msgs = append(msgs, &moonshot.ChatCompletionsMessage{Role: moonshot.RoleSystem, Content: opsSQLSystemPrompt})
+	}
+	// 注入实时 schema（仅命名/类型，业务语义注释仍在 system prompt 的硬编码 schema 里）。
+	// 30000 字硬上限——绝大多数 schema 远小于此，超出时截断防止 user 消息过大。
+	if live := loadLiveSchema(); live != "" {
+		if len(live) > 30000 {
+			live = live[:30000] + "\n...(truncated)"
 		}
+		msgs = append(msgs, &moonshot.ChatCompletionsMessage{
+			Role: moonshot.RoleUser,
+			Content: "以下是来自 information_schema 的最新表/列/类型快照（**与上方硬编码 schema 摘要互补**——业务语义参考上方注释，最新列名/类型以本快照为准；若两者冲突以本快照为准）：\n\n" + live,
+		})
 	}
-	return []*moonshot.ChatCompletionsMessage{
-		{Role: moonshot.RoleSystem, Content: opsSQLSystemPrompt},
-		{Role: moonshot.RoleUser, Content: userContent},
-	}
+	msgs = append(msgs, &moonshot.ChatCompletionsMessage{Role: moonshot.RoleUser, Content: "运维问题：" + question})
+	return msgs
 }
 
 // opsSummarySystemPrompt 第二轮总结时的提示词——把结果换成中文一段话。

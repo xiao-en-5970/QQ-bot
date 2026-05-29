@@ -82,6 +82,12 @@ func main() {
 		} else {
 			global.Hfut = hc
 			zaplog.Logger.Infof("hfut 客户端已启用 (url=%s, 自签 JWT 模式)", conf.Cfg.Hfut.APIURL)
+			// 启动实时 schema 同步：首拉同步 + 后台每 1h 刷新。
+			// 让 GenerateOpsSQL 看到的 schema 永远是生产库的最新版本，不受硬编码注释过时影响。
+			// 详见 utils/kimi/schema_cache.go。
+			if global.Kimi != nil {
+				kimi.StartSchemaCacheSync(ctx, hc)
+			}
 		}
 	} else {
 		zaplog.Logger.Warnf("HFUT_API_URL / HFUT_API_JWT_SECRET 未完整配置，auto_reply 不会真上架（识别仍然能跑，回执用 [识别测试] 占位）")
