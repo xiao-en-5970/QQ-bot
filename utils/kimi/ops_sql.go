@@ -18,8 +18,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"qq_bot/conf"
+	zaplog "qq_bot/utils/zap"
 
 	"github.com/northes/go-moonshot"
 )
@@ -183,6 +185,15 @@ func (k *Kimi) GenerateOpsSQL(ctx context.Context, question string) (string, err
 		req.Messages = buildOpsSQLMessages("", question)
 		resp, err = k.cli.Chat().Completions(ctx, req)
 	}
+	// 一次性短退避重试：engine_overloaded_error / 5xx / 网络瞬抖大多 800ms 后好转。
+	// 跟 RecognizeBusinessActions 对齐——运维群里 @bot 查询本就要等几秒识别，
+	// 多等 0.8 秒拿到结果比直接报"engine overloaded"的劣质提示体验好得多。
+	// 重试只针对 retryable 错误（IsQuotaError 仍立刻返回，让 quotaGate 走熔断）。
+	if err != nil && IsRetryableError(err) {
+		zaplog.Logger.Infof("GenerateOpsSQL 临时错重试一次: %v", err)
+		time.Sleep(800 * time.Millisecond)
+		resp, err = k.cli.Chat().Completions(ctx, req)
+	}
 	globalQuotaGate.RecordResult(err)
 	if err != nil {
 		return "", fmt.Errorf("调用 moonshot completions 失败: %w", err)
@@ -201,6 +212,35 @@ func (k *Kimi) GenerateOpsSQL(ctx context.Context, question string) (string, err
 		return "", errors.New("LLM 返回了空 sql")
 	}
 	return parsed.SQL, nil
+}
+
+// RegenerateOpsSQL 把"上一版 SQL + 数据库报错"喂回 LLM，让它基于错误修正后重新输出一段 SQL。
+//
+// 调用场景：GenerateOpsSQL 写出的 SQL 在 hfut 端执行时被 PostgreSQL 拒（语法错 / 列名错 /
+// 类型转换错等），运维 controller 抓到 err 后调本方法把错误信息回灌给 Kimi，让它自己识别
+// 并修正——避免运维同事再手动重新提问一次。
+//
+// 实现：复用 GenerateOpsSQL 的整条链路（Context Cache + 短退避重试 + JSON 输出约束），
+// 只是把"原问题 / 失败 SQL / 数据库报错"三段拼进 user 消息——system prompt 不变，LLM
+// 在原 schema 上下文 + 现场错误下重新输出 {"sql": "..."}。
+//
+// 调用预算：上层负责限制只调一次（避免连环错误把 token 烧光）。
+func (k *Kimi) RegenerateOpsSQL(ctx context.Context, question, badSQL, dbError string) (string, error) {
+	if k == nil {
+		return "", errors.New("kimi 未启用")
+	}
+	question = truncateLog(question, 1000)
+	badSQL = truncateLog(badSQL, 2000)
+	dbError = truncateLog(dbError, 1000)
+	fixPrompt := fmt.Sprintf(
+		"原问题：%s\n\n"+
+			"上一次生成的 SQL 在 PostgreSQL 上执行失败，请基于错误信息修正后重新输出。\n\n"+
+			"失败的 SQL：\n%s\n\n"+
+			"PostgreSQL 报错：\n%s\n\n"+
+			"请仔细分析报错原因，按原本的输出约束（严格 JSON {\"sql\":\"...\"}，无 markdown 围栏）输出修正后的 SQL。",
+		question, badSQL, dbError,
+	)
+	return k.GenerateOpsSQL(ctx, fixPrompt)
 }
 
 // SummarizeOpsResult 把 SQL 执行结果（columns + rows）交给 LLM 总结成一段中文。
@@ -228,7 +268,7 @@ func (k *Kimi) SummarizeOpsResult(ctx context.Context, question, sqlStr string, 
 		"truncated":  len(rows) > len(snippet),
 	})
 	model := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.RecognizeModel)
-	resp, err := k.cli.Chat().Completions(ctx, &moonshot.ChatCompletionsRequest{
+	req := &moonshot.ChatCompletionsRequest{
 		Model: model,
 		Messages: []*moonshot.ChatCompletionsMessage{
 			{Role: moonshot.RoleSystem, Content: opsSummarySystemPrompt},
@@ -236,7 +276,14 @@ func (k *Kimi) SummarizeOpsResult(ctx context.Context, question, sqlStr string, 
 		},
 		Temperature: 0.4,
 		MaxTokens:   2048,
-	})
+	}
+	resp, err := k.cli.Chat().Completions(ctx, req)
+	// 跟 GenerateOpsSQL 对齐的短退避重试，覆盖 engine_overloaded_error / 5xx / 网络瞬抖。
+	if err != nil && IsRetryableError(err) {
+		zaplog.Logger.Infof("SummarizeOpsResult 临时错重试一次: %v", err)
+		time.Sleep(800 * time.Millisecond)
+		resp, err = k.cli.Chat().Completions(ctx, req)
+	}
 	globalQuotaGate.RecordResult(err)
 	if err != nil {
 		return "", fmt.Errorf("调用 moonshot completions 失败: %w", err)

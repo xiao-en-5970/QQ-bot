@@ -89,7 +89,14 @@ func HandleOpsQuery(client *http.Client, msg *model.Message, question string) {
 			_ = SendGroupAtText(client, msg.GroupID, msg.UserID, "运维助手过载（Kimi 冷却中），请稍后再试")
 			return
 		}
+		// kimi 内部已经自动重试过一次（800ms 退避）；走到这里说明重试后仍是同类型瞬时错。
+		// 不把"engine_overloaded_error"这种技术细节贴到运维群里——折回干净的人话提示，
+		// 鼓励运维同学手动重试一次（自动重试 + 手动重试两层基本能覆盖所有瞬时错）。
 		zaplog.Logger.Warnf("ops_query generate sql 失败: %v", err)
+		if kimi.IsRetryableError(err) {
+			_ = SendGroupAtText(client, msg.GroupID, msg.UserID, "Kimi 引擎当前繁忙，已自动重试一次仍未恢复，请稍后再试一次")
+			return
+		}
 		_ = SendGroupAtText(client, msg.GroupID, msg.UserID, "生成 SQL 失败："+truncateForReply(err.Error(), 200))
 		return
 	}
@@ -101,10 +108,47 @@ func HandleOpsQuery(client *http.Client, msg *model.Message, question string) {
 	res, err := global.Hfut.RunAdminSQL(execCtx, sqlStr, 200)
 	cancelExec()
 	if err != nil {
-		zaplog.Logger.Warnf("ops_query exec sql 失败 sql=%q: %v", truncateForLog(sqlStr, 200), err)
-		_ = SendGroupAtText(client, msg.GroupID, msg.UserID,
-			fmt.Sprintf("SQL 执行失败：%s\n\nSQL:\n%s", truncateForReply(err.Error(), 200), sqlStr))
-		return
+		// 执行失败时把错误回灌给 Kimi 让它自动修正一次。
+		// 典型场景：LLM 写出 `EXTRACT(DATE FROM ts)` 这种 PG 不支持的语法、列名拼错、
+		// 类型转换出错等——LLM 看到具体 PG 报错通常能自我修正。最多重试 1 次避免连环烧 token。
+		origErr := err
+		zaplog.Logger.Warnf("ops_query exec sql 失败 sql=%q: %v；尝试让 Kimi 自动修正",
+			truncateForLog(sqlStr, 200), origErr)
+
+		fixCtx, cancelFix := context.WithTimeout(context.Background(), 30*time.Second)
+		fixedSQL, fixErr := global.Kimi.RegenerateOpsSQL(fixCtx, q, sqlStr, origErr.Error())
+		cancelFix()
+		if fixErr != nil {
+			// 自动修正本身失败（quota / 网络 / Kimi 引擎过载等）→ 直接把原始 SQL 错报给群
+			zaplog.Logger.Warnf("ops_query 自动修正失败: %v", fixErr)
+			_ = SendGroupAtText(client, msg.GroupID, msg.UserID,
+				fmt.Sprintf("SQL 执行失败：%s\n\nSQL:\n%s", truncateForReply(origErr.Error(), 200), sqlStr))
+			return
+		}
+		fixedSQL = strings.TrimSpace(stripCodeFence(fixedSQL))
+		zaplog.Logger.Infof("ops_query 自动修正 sql 完成 orig=%q fixed=%q",
+			truncateForLog(sqlStr, 200), truncateForLog(fixedSQL, 200))
+
+		// 用修正后的 SQL 再执行一次
+		execCtx2, cancelExec2 := context.WithTimeout(context.Background(), 15*time.Second)
+		res2, err2 := global.Hfut.RunAdminSQL(execCtx2, fixedSQL, 200)
+		cancelExec2()
+		if err2 != nil {
+			// 修正后仍失败 → 把"两段 SQL + 两段错误"都报给群，运维同学一眼能看出 LLM 修正
+			// 思路是否合理，必要时手动改 SQL 再问一次（运维群只允许 @bot 提问不允许执行裸 SQL）
+			zaplog.Logger.Warnf("ops_query 修正后仍失败: fixedSQL=%q err=%v",
+				truncateForLog(fixedSQL, 200), err2)
+			_ = SendGroupAtText(client, msg.GroupID, msg.UserID,
+				fmt.Sprintf("SQL 执行失败，自动修正后仍失败。\n\n原 SQL：\n%s\n\n原错误：\n%s\n\n修正后 SQL：\n%s\n\n修正后错误：\n%s",
+					sqlStr,
+					truncateForReply(origErr.Error(), 200),
+					fixedSQL,
+					truncateForReply(err2.Error(), 200)))
+			return
+		}
+		// 修正成功 → 把 sqlStr / res 替换成修正版，继续走"总结 + 回复"流程
+		sqlStr = fixedSQL
+		res = res2
 	}
 
 	// 第 3 步：LLM 总结。失败不阻塞，回退到机械摘要
