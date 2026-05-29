@@ -171,10 +171,28 @@ const opsSummarySystemPrompt = `你是运维助手，刚刚执行了一段只读
 
 // GenerateOpsSQL 用 Kimi 生成一段只读 SQL；返回 SQL 字符串。
 //
+// 模型选择：
+//
+//	主模型 = conf.Cfg.Gpt.RecognizeModel（默认 kimi-k2-0905-preview）
+//	  K2 是 preview 模型 + thinking 推理，对"SQL 生成"这种重推理任务
+//	  在过载窗口里**稳定踩坑** engine_overloaded（即便重试也大概率失败）；
+//	  识别那种"打标签"类轻推理任务在 K2 上不踩这个坑。
+//
+//	降级模型 = conf.Cfg.Gpt.OpsFallbackModel（默认 moonshot-v1-auto）
+//	  v1 系列是稳定版、推理短、配额松。当 K2 持续过载时自动切到 v1
+//	  继续出 SQL——对"SQL 生成"这种结构化任务 v1 也完全够用。
+//
+// 重试链路（4 次机会）：
+//
+//	① 主模型 → 失败但 retryable
+//	② 主模型重试（短退避 1.5s）→ 还失败且仍 retryable
+//	③ 降级到 fallback 模型重试（再退避 1s） → 还失败
+//	④ 返回错误（上层 ops_query.go 给运维群发"已自动重试 + 降级仍失败"的人话提示）
+//
 // 失败：
 //
 //   - ErrQuotaCooling：quota gate 冷却中，调用方应当回复"运维助手暂时过载稍后再试"
-//   - 其它 error：网络 / API / 解析失败
+//   - 其它 error：四次尝试都失败（网络 / API / 解析）
 func (k *Kimi) GenerateOpsSQL(ctx context.Context, question string) (string, error) {
 	if k == nil {
 		return "", errors.New("kimi 未启用")
@@ -182,11 +200,12 @@ func (k *Kimi) GenerateOpsSQL(ctx context.Context, question string) (string, err
 	if blocked, _ := globalQuotaGate.IsBlocked(); blocked {
 		return "", ErrQuotaCooling
 	}
-	model := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.RecognizeModel)
+	primaryModel := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.RecognizeModel)
+	fallbackModelStr := conf.Cfg.Gpt.OpsFallbackModel
 	// 优先用 Context Cache 省 system prompt token；失效 / 创建失败时 fallback 老路
 	cacheID := k.opsSQLCache.loadID()
 	req := &moonshot.ChatCompletionsRequest{
-		Model:       model,
+		Model:       primaryModel,
 		Messages:    buildOpsSQLMessages(cacheID, question),
 		Temperature: 0.2,
 		// 默认 1024 太小（一个稍复杂的 SQL + 注释就接近这个量了），统一 4096
@@ -200,14 +219,23 @@ func (k *Kimi) GenerateOpsSQL(ctx context.Context, question string) (string, err
 		req.Messages = buildOpsSQLMessages("", question)
 		resp, err = k.cli.Chat().Completions(ctx, req)
 	}
-	// 一次性短退避重试：engine_overloaded_error / 5xx / 网络瞬抖大多 800ms 后好转。
-	// 跟 RecognizeBusinessActions 对齐——运维群里 @bot 查询本就要等几秒识别，
-	// 多等 0.8 秒拿到结果比直接报"engine overloaded"的劣质提示体验好得多。
-	// 重试只针对 retryable 错误（IsQuotaError 仍立刻返回，让 quotaGate 走熔断）。
+	// ② 主模型同型号重试（1.5s 退避）
 	if err != nil && IsRetryableError(err) {
-		zaplog.Logger.Infof("GenerateOpsSQL 临时错重试一次: %v", err)
-		time.Sleep(800 * time.Millisecond)
+		zaplog.Logger.Infof("GenerateOpsSQL 主模型(%s)临时错重试一次: %v", primaryModel, err)
+		time.Sleep(1500 * time.Millisecond)
 		resp, err = k.cli.Chat().Completions(ctx, req)
+	}
+	// ③ 主模型仍 retryable → 降级到 fallback 模型再尝试一次。
+	// K2 在 SQL 生成这种重推理任务上稳定踩 engine_overloaded，v1-auto 这种稳定模型基本不会。
+	if err != nil && IsRetryableError(err) && fallbackModelStr != "" && fallbackModelStr != string(primaryModel) {
+		zaplog.Logger.Warnf("GenerateOpsSQL 主模型(%s)持续过载，降级到 %s 再试: %v",
+			primaryModel, fallbackModelStr, err)
+		time.Sleep(1 * time.Second)
+		fallbackReq := *req
+		fallbackReq.Model = moonshot.ChatCompletionsModelID(fallbackModelStr)
+		// 降级模型不一定有同样的前缀缓存，cacheID 强制清掉走老路
+		fallbackReq.Messages = buildOpsSQLMessages("", question)
+		resp, err = k.cli.Chat().Completions(ctx, &fallbackReq)
 	}
 	globalQuotaGate.RecordResult(err)
 	if err != nil {
@@ -282,9 +310,10 @@ func (k *Kimi) SummarizeOpsResult(ctx context.Context, question, sqlStr string, 
 		"row_count":  len(rows),
 		"truncated":  len(rows) > len(snippet),
 	})
-	model := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.RecognizeModel)
+	primaryModel := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.RecognizeModel)
+	fallbackModelStr := conf.Cfg.Gpt.OpsFallbackModel
 	req := &moonshot.ChatCompletionsRequest{
-		Model: model,
+		Model: primaryModel,
 		Messages: []*moonshot.ChatCompletionsMessage{
 			{Role: moonshot.RoleSystem, Content: opsSummarySystemPrompt},
 			{Role: moonshot.RoleUser, Content: "结果上下文（JSON）：" + string(payload)},
@@ -293,11 +322,21 @@ func (k *Kimi) SummarizeOpsResult(ctx context.Context, question, sqlStr string, 
 		MaxTokens:   2048,
 	}
 	resp, err := k.cli.Chat().Completions(ctx, req)
-	// 跟 GenerateOpsSQL 对齐的短退避重试，覆盖 engine_overloaded_error / 5xx / 网络瞬抖。
+	// 主模型同型号短退避重试
 	if err != nil && IsRetryableError(err) {
-		zaplog.Logger.Infof("SummarizeOpsResult 临时错重试一次: %v", err)
-		time.Sleep(800 * time.Millisecond)
+		zaplog.Logger.Infof("SummarizeOpsResult 主模型(%s)临时错重试一次: %v", primaryModel, err)
+		time.Sleep(1500 * time.Millisecond)
 		resp, err = k.cli.Chat().Completions(ctx, req)
+	}
+	// 仍 retryable → 降级到 OpsFallbackModel；总结失败时上层会回退到 mechanicalSummary，
+	// 但能拿到 LLM 中文摘要体验更好，所以多一层降级值得。
+	if err != nil && IsRetryableError(err) && fallbackModelStr != "" && fallbackModelStr != string(primaryModel) {
+		zaplog.Logger.Warnf("SummarizeOpsResult 主模型(%s)持续过载，降级到 %s 再试: %v",
+			primaryModel, fallbackModelStr, err)
+		time.Sleep(1 * time.Second)
+		fallbackReq := *req
+		fallbackReq.Model = moonshot.ChatCompletionsModelID(fallbackModelStr)
+		resp, err = k.cli.Chat().Completions(ctx, &fallbackReq)
 	}
 	globalQuotaGate.RecordResult(err)
 	if err != nil {

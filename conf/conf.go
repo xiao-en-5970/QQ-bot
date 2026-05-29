@@ -325,6 +325,12 @@ type Gpt struct {
 	SystemPrompt         string `mapstructure:"system_prompt"`
 	Model                string `mapstructure:"model"`
 	RecognizeModel       string `mapstructure:"recognize_model"`
+	// OpsFallbackModel 当主模型（RecognizeModel，默认 kimi-k2-0905-preview）在运维
+	// SQL 生成路径持续过载时降级使用的稳定模型。K2 是 preview 模型且带 thinking 推理，
+	// 在"SQL 生成"这种重推理任务上过载概率比"业务识别"这种轻推理任务高得多——
+	// 给 ops_sql 单独提供一条 fallback，让 K2 持续 overloaded 时自动切到 v1 系列继续出 SQL，
+	// 不影响识别路径的 K2 用量。默认 moonshot-v1-auto；env GPT_OPS_FALLBACK_MODEL。
+	OpsFallbackModel     string `mapstructure:"ops_fallback_model"`
 	// VisionModel 用于 OCR 上架的多模态模型。默认 moonshot-v1-32k-vision-preview；
 	// 仅当窗口里只有图片、用户没补任何业务文字、又过了沉默期时触发——对每张图单独
 	// 调一次 vision API 让模型直接从图片里抽 title / price 等再上架。
@@ -786,7 +792,7 @@ func bindEnvKeys() {
 		"cache.tmp_dir", "cache.pdf_tmp_dir", "cache.max_size", "cache.clear_interval",
 		"tools.jmcomic_bin", "tools.img2pdf_bin", "tools.python_bin",
 		"gpt.api_key", "gpt.max_context_size", "gpt.max_tool_rounds", "gpt.system_prompt",
-		"gpt.model", "gpt.recognize_model", "gpt.quota_cooldown_seconds", "gpt.quota_error_threshold",
+		"gpt.model", "gpt.recognize_model", "gpt.ops_fallback_model", "gpt.vision_model", "gpt.quota_cooldown_seconds", "gpt.quota_error_threshold",
 		"commands.enabled", "commands.default",
 		"internal.port",
 		"bot.ops_group_id", "bot.ops_group_ids",
@@ -847,6 +853,10 @@ func applyDefaults(c *Config) {
 	}
 	if strings.TrimSpace(c.Gpt.RecognizeModel) == "" {
 		c.Gpt.RecognizeModel = "kimi-k2-0905-preview"
+	}
+	// ops_sql 主模型过载时降级用——选稳定的 v1 系列，配额松、推理短，写 SQL 也够用。
+	if strings.TrimSpace(c.Gpt.OpsFallbackModel) == "" {
+		c.Gpt.OpsFallbackModel = "moonshot-v1-auto"
 	}
 	if strings.TrimSpace(c.Gpt.VisionModel) == "" {
 		// Moonshot 的视觉模型默认选 32k 上下文足够（OCR 提取的文本通常很短）。
