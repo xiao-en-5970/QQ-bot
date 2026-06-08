@@ -325,6 +325,18 @@ func (m *autoReplyManager) processSnapshot(key autoReplyBucketKey, snap []autoRe
 		return
 	}
 
+	// **黑名单关键词预拦截**：把整桶消息的扁平文本拼起来过一遍 BlockedKeywords，
+	// 命中任一就静默丢弃整桶——不送 Kimi（省 token + 避免污染识别数据）、不上架、
+	// 不在群里发任何反馈。校园场景下用于过滤"家教 / 兼职 / 代考 / 出国"等违规品类。
+	// 注意：消歧（disambig）路径在上面已经处理过——黑名单拦截只针对"新意图"窗口，
+	// 不影响用户在数字选择的二次确认。
+	if kw, hit := matchBlockedKeywordInSnap(snap); hit {
+		zaplog.Logger.Infof("autoReply 黑名单命中 group=%d user=%d kw=%q msgs=%d → 静默丢弃整桶",
+			key.GroupID, key.UserID, kw, len(snap))
+		metrics.IncRecognize("blocked_keyword")
+		return
+	}
+
 	// P3.2：消歧选择消费——如果当前 (group, user) 有 pending disambig 上下文，
 	// 且**整段窗口里的所有消息**都是单字数字选择（"1"/"2"/"①"），就直接处理选择
 	// 而不送 Kimi。同窗口里夹了别的话题（"1 还有这个鞋架也卖 5 块"）就忽略消歧、
@@ -680,6 +692,30 @@ func normalizeBatchContent(s string) string {
 		lines = append(lines, p+"。")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// matchBlockedKeywordInSnap 对一桶快照里的所有文本拼接后做关键词黑名单匹配。
+//
+// 拼接 FlatText（含 [图片] 等占位符无关，关键词只针对文字）；命中即返回首个命中
+// 的关键词。空快照 / 关键词列表为空 → 不命中。
+//
+// 注意：这只检查 QQ 群消息**文本**部分；图片 OCR 结果在 image-only 路径单独再检查
+// （见 runVisionOnOneImage）。
+func matchBlockedKeywordInSnap(snap []autoReplyMsg) (string, bool) {
+	if len(snap) == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	for _, m := range snap {
+		if m.FlatText == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(m.FlatText)
+	}
+	return conf.Cfg.Bot.MatchBlockedKeyword(b.String())
 }
 
 // StartAutoReplyScanner 启动后台扫描协程。

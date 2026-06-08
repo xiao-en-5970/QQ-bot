@@ -23,7 +23,7 @@ import (
 	"qq_bot/conf"
 	zaplog "qq_bot/utils/zap"
 
-	"github.com/northes/go-moonshot"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // opsSQLSchemaSummary 喂给 LLM 的"重要表 + 列摘要"。
@@ -142,12 +142,12 @@ const opsSQLSystemPrompt = `你是一名"只读 SQL 助手"，根据运维同事
 // 重新发，不影响 cache 但能让 LLM 看到生产库的最新列名。
 //
 // 实时 schema 为空（启动后首拉未完 / 一直失败）→ 退化到纯硬编码 schema（system prompt 内）。
-func buildOpsSQLMessages(cacheID, question string) []*moonshot.ChatCompletionsMessage {
-	msgs := make([]*moonshot.ChatCompletionsMessage, 0, 4)
+func buildOpsSQLMessages(cacheID, question string) []openai.ChatCompletionMessage {
+	msgs := make([]openai.ChatCompletionMessage, 0, 4)
 	if cacheID != "" {
 		msgs = append(msgs, cacheReferenceMessage(cacheID))
 	} else {
-		msgs = append(msgs, &moonshot.ChatCompletionsMessage{Role: moonshot.RoleSystem, Content: opsSQLSystemPrompt})
+		msgs = append(msgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: opsSQLSystemPrompt})
 	}
 	// 注入实时 schema（仅命名/类型，业务语义注释仍在 system prompt 的硬编码 schema 里）。
 	// 30000 字硬上限——绝大多数 schema 远小于此，超出时截断防止 user 消息过大。
@@ -155,12 +155,12 @@ func buildOpsSQLMessages(cacheID, question string) []*moonshot.ChatCompletionsMe
 		if len(live) > 30000 {
 			live = live[:30000] + "\n...(truncated)"
 		}
-		msgs = append(msgs, &moonshot.ChatCompletionsMessage{
-			Role: moonshot.RoleUser,
+		msgs = append(msgs, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
 			Content: "以下是来自 information_schema 的最新表/列/类型快照（**与上方硬编码 schema 摘要互补**——业务语义参考上方注释，最新列名/类型以本快照为准；若两者冲突以本快照为准）：\n\n" + live,
 		})
 	}
-	msgs = append(msgs, &moonshot.ChatCompletionsMessage{Role: moonshot.RoleUser, Content: "运维问题：" + question})
+	msgs = append(msgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "运维问题：" + question})
 	return msgs
 }
 
@@ -200,49 +200,49 @@ func (k *Kimi) GenerateOpsSQL(ctx context.Context, question string) (string, err
 	if blocked, _ := globalQuotaGate.IsBlocked(); blocked {
 		return "", ErrQuotaCooling
 	}
-	primaryModel := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.RecognizeModel)
+	primaryModel := conf.Cfg.Gpt.RecognizeModel
 	fallbackModelStr := conf.Cfg.Gpt.OpsFallbackModel
 	// 优先用 Context Cache 省 system prompt token；失效 / 创建失败时 fallback 老路
 	cacheID := k.opsSQLCache.loadID()
-	req := &moonshot.ChatCompletionsRequest{
+	req := openai.ChatCompletionRequest{
 		Model:       primaryModel,
 		Messages:    buildOpsSQLMessages(cacheID, question),
 		Temperature: 0.2,
 		// 默认 1024 太小（一个稍复杂的 SQL + 注释就接近这个量了），统一 4096
 		MaxTokens: 4096,
-		ResponseFormat: &moonshot.ChatCompletionsRequestResponseFormat{
-			Type: moonshot.ChatCompletionsResponseFormatJSONObject,
+		ResponseFormat: &openai.ChatCompletionResponseFormat{
+			Type: openai.ChatCompletionResponseFormatTypeJSONObject,
 		},
 	}
-	resp, err := k.cli.Chat().Completions(ctx, req)
+	resp, err := k.cli.CreateChatCompletion(ctx, req)
 	if err != nil && cacheID != "" && k.opsSQLCache.dropIfMissing(err, k.cli) {
 		req.Messages = buildOpsSQLMessages("", question)
-		resp, err = k.cli.Chat().Completions(ctx, req)
+		resp, err = k.cli.CreateChatCompletion(ctx, req)
 	}
 	// ② 主模型同型号重试（1.5s 退避）
 	if err != nil && IsRetryableError(err) {
 		zaplog.Logger.Infof("GenerateOpsSQL 主模型(%s)临时错重试一次: %v", primaryModel, err)
 		time.Sleep(1500 * time.Millisecond)
-		resp, err = k.cli.Chat().Completions(ctx, req)
+		resp, err = k.cli.CreateChatCompletion(ctx, req)
 	}
 	// ③ 主模型仍 retryable → 降级到 fallback 模型再尝试一次。
 	// K2 在 SQL 生成这种重推理任务上稳定踩 engine_overloaded，v1-auto 这种稳定模型基本不会。
-	if err != nil && IsRetryableError(err) && fallbackModelStr != "" && fallbackModelStr != string(primaryModel) {
+	if err != nil && IsRetryableError(err) && fallbackModelStr != "" && fallbackModelStr != primaryModel {
 		zaplog.Logger.Warnf("GenerateOpsSQL 主模型(%s)持续过载，降级到 %s 再试: %v",
 			primaryModel, fallbackModelStr, err)
 		time.Sleep(1 * time.Second)
-		fallbackReq := *req
-		fallbackReq.Model = moonshot.ChatCompletionsModelID(fallbackModelStr)
+		fallbackReq := req
+		fallbackReq.Model = fallbackModelStr
 		// 降级模型不一定有同样的前缀缓存，cacheID 强制清掉走老路
 		fallbackReq.Messages = buildOpsSQLMessages("", question)
-		resp, err = k.cli.Chat().Completions(ctx, &fallbackReq)
+		resp, err = k.cli.CreateChatCompletion(ctx, fallbackReq)
 	}
 	globalQuotaGate.RecordResult(err)
 	if err != nil {
-		return "", fmt.Errorf("调用 moonshot completions 失败: %w", err)
+		return "", fmt.Errorf("调用 LLM completions 失败: %w", err)
 	}
 	if len(resp.Choices) == 0 {
-		return "", errors.New("moonshot 返回 0 choices")
+		return "", errors.New("LLM 返回 0 choices")
 	}
 	raw := resp.Choices[0].Message.Content
 	var parsed struct {
@@ -310,40 +310,40 @@ func (k *Kimi) SummarizeOpsResult(ctx context.Context, question, sqlStr string, 
 		"row_count":  len(rows),
 		"truncated":  len(rows) > len(snippet),
 	})
-	primaryModel := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.RecognizeModel)
+	primaryModel := conf.Cfg.Gpt.RecognizeModel
 	fallbackModelStr := conf.Cfg.Gpt.OpsFallbackModel
-	req := &moonshot.ChatCompletionsRequest{
+	req := openai.ChatCompletionRequest{
 		Model: primaryModel,
-		Messages: []*moonshot.ChatCompletionsMessage{
-			{Role: moonshot.RoleSystem, Content: opsSummarySystemPrompt},
-			{Role: moonshot.RoleUser, Content: "结果上下文（JSON）：" + string(payload)},
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleSystem, Content: opsSummarySystemPrompt},
+			{Role: openai.ChatMessageRoleUser, Content: "结果上下文（JSON）：" + string(payload)},
 		},
 		Temperature: 0.4,
 		MaxTokens:   2048,
 	}
-	resp, err := k.cli.Chat().Completions(ctx, req)
+	resp, err := k.cli.CreateChatCompletion(ctx, req)
 	// 主模型同型号短退避重试
 	if err != nil && IsRetryableError(err) {
 		zaplog.Logger.Infof("SummarizeOpsResult 主模型(%s)临时错重试一次: %v", primaryModel, err)
 		time.Sleep(1500 * time.Millisecond)
-		resp, err = k.cli.Chat().Completions(ctx, req)
+		resp, err = k.cli.CreateChatCompletion(ctx, req)
 	}
 	// 仍 retryable → 降级到 OpsFallbackModel；总结失败时上层会回退到 mechanicalSummary，
 	// 但能拿到 LLM 中文摘要体验更好，所以多一层降级值得。
-	if err != nil && IsRetryableError(err) && fallbackModelStr != "" && fallbackModelStr != string(primaryModel) {
+	if err != nil && IsRetryableError(err) && fallbackModelStr != "" && fallbackModelStr != primaryModel {
 		zaplog.Logger.Warnf("SummarizeOpsResult 主模型(%s)持续过载，降级到 %s 再试: %v",
 			primaryModel, fallbackModelStr, err)
 		time.Sleep(1 * time.Second)
-		fallbackReq := *req
-		fallbackReq.Model = moonshot.ChatCompletionsModelID(fallbackModelStr)
-		resp, err = k.cli.Chat().Completions(ctx, &fallbackReq)
+		fallbackReq := req
+		fallbackReq.Model = fallbackModelStr
+		resp, err = k.cli.CreateChatCompletion(ctx, fallbackReq)
 	}
 	globalQuotaGate.RecordResult(err)
 	if err != nil {
-		return "", fmt.Errorf("调用 moonshot completions 失败: %w", err)
+		return "", fmt.Errorf("调用 LLM completions 失败: %w", err)
 	}
 	if len(resp.Choices) == 0 {
-		return "", errors.New("moonshot 返回 0 choices")
+		return "", errors.New("LLM 返回 0 choices")
 	}
 	return resp.Choices[0].Message.Content, nil
 }

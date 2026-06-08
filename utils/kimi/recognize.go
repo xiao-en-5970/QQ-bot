@@ -19,7 +19,7 @@ import (
 	"qq_bot/conf"
 	zaplog "qq_bot/utils/zap"
 
-	"github.com/northes/go-moonshot"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // ErrQuotaCooling 是识别入口在 quotaGate 冷却期内 short-circuit 时返回的 sentinel。
@@ -114,17 +114,17 @@ type RecognizeResult struct {
 //     cache 创建失败 / cache 失效兜底）。
 //
 // 单独抽函数方便在 cache 失效 fallback 时复用同一份构造逻辑。
-func buildRecognizeMessages(cacheID, inputJSON string) []*moonshot.ChatCompletionsMessage {
+func buildRecognizeMessages(cacheID, inputJSON string) []openai.ChatCompletionMessage {
 	userContent := "请识别下面这段窗口的业务动作:\n" + inputJSON
 	if cacheID != "" {
-		return []*moonshot.ChatCompletionsMessage{
+		return []openai.ChatCompletionMessage{
 			cacheReferenceMessage(cacheID),
-			{Role: moonshot.RoleUser, Content: userContent},
+			{Role: openai.ChatMessageRoleUser, Content: userContent},
 		}
 	}
-	return []*moonshot.ChatCompletionsMessage{
-		{Role: moonshot.RoleSystem, Content: recognizeSystemPrompt},
-		{Role: moonshot.RoleUser, Content: userContent},
+	return []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: recognizeSystemPrompt},
+		{Role: openai.ChatMessageRoleUser, Content: userContent},
 	}
 }
 
@@ -615,54 +615,55 @@ func (k *Kimi) RecognizeBusinessActions(ctx context.Context, input RecognizeInpu
 		return nil, fmt.Errorf("RecognizeInput 序列化失败: %w", err)
 	}
 
-	model := moonshot.ChatCompletionsModelID(conf.Cfg.Gpt.RecognizeModel)
+	model := conf.Cfg.Gpt.RecognizeModel
 
 	// 优先用 Moonshot Context Cache：把超长的 recognizeSystemPrompt 注册成命名缓存
 	// 后只塞一条 cache 引用 + 重置 TTL，省 80%+ 的 system message 输入 token 费。
 	// 详见 context_cache.go。fallback 走老路：每次发完整 system prompt。
+	// 注：非 Moonshot 平台 loadID() 永远返回 ""，走老路（依赖各家自动前缀缓存）。
 	cacheID := k.recognizeCache.loadID()
 	messages := buildRecognizeMessages(cacheID, string(inputJSON))
 
-	req := &moonshot.ChatCompletionsRequest{
+	req := openai.ChatCompletionRequest{
 		Model:       model,
 		Messages:    messages,
 		Temperature: 0.2, // 低温度——识别任务要稳定，不要发散
-		// Moonshot SDK 默认 max_tokens=0 表示走服务端默认（1024），实测当用户一次
-		// 发了 10+ 个商品（每个商品 ~300 tokens JSON）时会被截断、返回 finish_reason=length，
+		// 默认 max_tokens 由各平台决定（通常 1024），实测当用户一次发了 10+ 个商品
+		// （每个商品 ~300 tokens JSON）时会被截断、返回 finish_reason=length，
 		// 上层 json.Unmarshal 报 unexpected end of JSON input。把上限拉到 8192，
-		// 覆盖到 20+ 商品的极端场景；moonshot-v1-auto / kimi-k2 都支持。
+		// 覆盖到 20+ 商品的极端场景；moonshot-v1-auto / kimi-k2 / deepseek-chat 都支持。
 		MaxTokens: 8192,
-		ResponseFormat: &moonshot.ChatCompletionsRequestResponseFormat{
-			Type: moonshot.ChatCompletionsResponseFormatJSONObject,
+		ResponseFormat: &openai.ChatCompletionResponseFormat{
+			Type: openai.ChatCompletionResponseFormatTypeJSONObject,
 		},
 		// 不传 Tools——识别不需要 tool calling
 	}
-	resp, err := k.cli.Chat().Completions(ctx, req)
+	resp, err := k.cli.CreateChatCompletion(ctx, req)
 	// cache 失效特例：Moonshot 返回 "cache not found" / "invalid cache" 类错误时，
 	// 清掉内存 cache_id（后台重建）并退化到老路重试一次——避免本次识别整个失败。
 	if err != nil && cacheID != "" && k.recognizeCache.dropIfMissing(err, k.cli) {
 		req.Messages = buildRecognizeMessages("", string(inputJSON))
-		resp, err = k.cli.Chat().Completions(ctx, req)
+		resp, err = k.cli.CreateChatCompletion(ctx, req)
 	}
 	// 一次性短退避重试：engine_overloaded / 5xx / 网络瞬抖大多 800ms 后好。
 	// 重试只针对 retryable 错误（IsQuotaError 仍立刻返回，让 quotaGate 走熔断）。
 	if err != nil && IsRetryableError(err) {
 		zaplog.Logger.Infof("RecognizeBusinessActions 临时错重试一次: %v", err)
 		time.Sleep(800 * time.Millisecond)
-		resp, err = k.cli.Chat().Completions(ctx, req)
+		resp, err = k.cli.CreateChatCompletion(ctx, req)
 	}
 	globalQuotaGate.RecordResult(err)
 	if err != nil {
-		return nil, fmt.Errorf("调用 moonshot completions 失败: %w", err)
+		return nil, fmt.Errorf("调用 LLM completions 失败: %w", err)
 	}
-	msg, err := resp.GetMessage()
-	if err != nil {
-		return nil, fmt.Errorf("从 moonshot 响应取 message 失败: %w", err)
+	if len(resp.Choices) == 0 {
+		return nil, errors.New("LLM 返回 0 choices")
 	}
+	msg := resp.Choices[0].Message
 
 	// finish_reason=length 表示输出被 max_tokens 截断；JSON 一定不完整，直接报错
 	// 走 ack=fail（或 normal 静默），避免下游 json.Unmarshal 报 unexpected EOF 的劣质日志。
-	if len(resp.Choices) > 0 && resp.Choices[0].FinishReason == moonshot.FinishReasonLength {
+	if resp.Choices[0].FinishReason == openai.FinishReasonLength {
 		return nil, fmt.Errorf("识别结果被 max_tokens=%d 截断（finish_reason=length），用户内容过多，请考虑分批发送", req.MaxTokens)
 	}
 

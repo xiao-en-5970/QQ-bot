@@ -87,8 +87,9 @@ func pullOnce(parent context.Context) {
 	if overlay.SilentMode != nil {
 		silentStr = fmt.Sprintf("%v", *overlay.SilentMode)
 	}
-	zaplog.Logger.Infof("runtime config sync: 已应用 keys=%d  whitelist=%v ops=%v silent=%s",
-		len(raw), overlay.AutoReplyWhitelist, overlay.OpsGroupIDs, silentStr)
+	zaplog.Logger.Infof("runtime config sync: 已应用 keys=%d reply=%v silent_wl=%v ops=%v silent_mode=%s blocked=%v",
+		len(raw), overlay.AutoReplyWhitelist, overlay.SilentWhitelist,
+		overlay.OpsGroupIDs, silentStr, overlay.BlockedKeywords)
 }
 
 // parseOverlay 把 hfut 返回的 key→json.RawMessage 解码为 RuntimeOverlay。
@@ -119,6 +120,31 @@ func parseOverlay(raw map[string]json.RawMessage) *conf.RuntimeOverlay {
 			zaplog.Logger.Warnf("runtime config: silent_mode 解析失败: %v", err)
 		} else {
 			out.SilentMode = &b
+		}
+	}
+	// silent_whitelist：只读白名单——bot 监听 + 识别 + 落库，**不在群里发反馈**
+	if v, ok := raw["silent_whitelist"]; ok {
+		var arr []int64
+		if err := json.Unmarshal(v, &arr); err != nil {
+			zaplog.Logger.Warnf("runtime config: silent_whitelist 解析失败: %v", err)
+		} else {
+			// 显式取空数组也算"管理员主动清空"，不退回 env 兜底
+			if arr == nil {
+				arr = []int64{}
+			}
+			out.SilentWhitelist = arr
+		}
+	}
+	// blocked_keywords：关键词黑名单——命中任一即拦截不识别
+	if v, ok := raw["blocked_keywords"]; ok {
+		var arr []string
+		if err := json.Unmarshal(v, &arr); err != nil {
+			zaplog.Logger.Warnf("runtime config: blocked_keywords 解析失败: %v", err)
+		} else {
+			if arr == nil {
+				arr = []string{}
+			}
+			out.BlockedKeywords = arr
 		}
 	}
 	return out

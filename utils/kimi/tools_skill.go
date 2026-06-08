@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/northes/go-moonshot"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // skillRoot 指向项目内 skill/ 目录的相对路径。
@@ -23,10 +23,12 @@ const skillRoot = "skill"
 // 第一次调用建议传 path="" 或 path="hfut-union/SKILL.md" 拿索引；
 // 模型自己根据用户问题决定下一步读哪个子 skill。
 func init() {
+	// OpenAI 标准的 function calling 工具描述。
+	// Parameters 用 map[string]any 表达 JSON Schema，跨平台兼容（Moonshot/DeepSeek/OpenAI 都接受）。
 	Register(Tool{
-		Spec: &moonshot.ChatCompletionsTool{
-			Type: moonshot.ChatCompletionsToolTypeFunction,
-			Function: &moonshot.ChatCompletionsToolFunction{
+		Spec: openai.Tool{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
 				Name: "read_skill",
 				Description: `读取 bot 内置 skill 文档（progressive disclosure / 渐进式披露）。
 
@@ -51,12 +53,12 @@ skill 文档按层级 + 主题分文件，避免一次塞爆上下文：
 其它路径（如 hfut-union/）会被工具拒绝——业务能力必须经过 bot 工具集
 （publish_good / off_shelf / publish_question 等）封装调用，
 不要让模型直接生成 HTTP 调用、不要让模型读 hfut-union 那套 API 文档。`,
-				Parameters: &moonshot.ChatCompletionsToolFunctionParameters{
-					Type: moonshot.ChatCompletionsParametersTypeObject,
-					Properties: map[string]*moonshot.ChatCompletionsToolFunctionProperties{
-						"path": {
-							Type:        "string",
-							Description: "skill 目录下的相对路径。运行时常用：'' (顶层索引) / 'bot/SKILL.md' (主入口) / 'bot/recognition.md' / 'bot/account-model.md' / 'bot/orphan.md' / 'bot/qq-bind.md' / 'bot/verbosity.md' / 'bot/phases.md'。",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{
+							"type":        "string",
+							"description": "skill 目录下的相对路径。运行时常用：'' (顶层索引) / 'bot/SKILL.md' (主入口) / 'bot/recognition.md' / 'bot/account-model.md' / 'bot/orphan.md' / 'bot/qq-bind.md' / 'bot/verbosity.md' / 'bot/phases.md'。",
 						},
 					},
 					// path 不必填，留空就读顶层索引

@@ -1,35 +1,30 @@
-// context_cache.go —— Moonshot Context Cache 接入。
+// context_cache.go —— Moonshot 专属 Context Cache 接入（仅当主 BaseURL 指向 Moonshot 时启用）。
 //
-// 核心思想：长 system prompt 注册成命名缓存，后续请求只塞 cache 引用 + reset_ttl
-// 续命；命中按"缓存 token 单价"计费（≈ 普通输入的 1/5）。
+// 核心思想：长 system prompt 在 Moonshot 服务端注册成命名缓存，后续请求只塞
+// cache 引用 + reset_ttl 续命；命中按"缓存 token 单价"计费（≈ 普通输入的 1/5）。
 //
-// ## Moonshot 现状（2026-05 实测）
+// ## 重构后的多平台行为（2026 年 6 月）
 //
-// Moonshot 有两套缓存机制，按 model family 分流：
+// bot 主链路改用 OpenAI 兼容协议（go-openai SDK）后，本模块的行为按平台分流：
 //
-// | Model Family   | 缓存机制                                    | 显式 /v1/caching API |
-// |----------------|---------------------------------------------|----------------------|
-// | `moonshot-v1`  | 显式：创建 cache_id → messages[0] 引用      | ✅ 支持                |
-// | `kimi-k2.*`    | **自动前缀缓存**（服务端检测 prompt 前缀）  | ❌ 调用即报 invalid    |
+// | 平台 | 显式 /v1/caching API | 行为 |
+// |------|----------------------|------|
+// | Moonshot/Kimi | ✅ 仅 moonshot-v1 family | 走 raw HTTP 调 /v1/caching 注册 cache |
+// | Moonshot K2 系列 | ❌ 不支持 | 服务端自动前缀缓存（cacheEntry 不 prime） |
+// | DeepSeek / OpenAI / Qwen 等 | ❌ 都不支持 | 各自有自动前缀缓存（cacheEntry 不 prime） |
 //
-// 调 kimi-k2 family 的显式 /v1/caching 会直接报 `model family is invalid`。
+// 所以在非 Moonshot 平台或非 v1 family 上，cacheEntry 字段保持空，loadID() 返回 ""，
+// 所有调用走"每次发完整 system prompt"老路——服务端自动前缀缓存仍能命中相同前缀，
+// **token 计费保持优惠**，只是 bot 端无需也无法显式管理 cache_id。
 //
 // ## 本项目的接入策略
 //
-// 默认 RecognizeModel = `kimi-k2-0905-preview`、Model = `moonshot-v1-auto`：
+// 默认 Model = `moonshot-v1-auto`、RecognizeModel = `kimi-k2-0905-preview`：
 //
-//   - **recognize / ops_sql**（kimi-k2 系列）：**不**主动 prime；每次请求继续把
-//     完整 system message 放在 messages[0]，Moonshot 服务端**自动前缀缓存**会识别
-//     连续请求的相同前缀并命中。除了保证"每次请求 prompt 字节级完全一致"之外，
-//     bot 端无需任何动作。
-//   - **chat**（moonshot-v1-auto）：用显式 /v1/caching prime 一次 → 后续请求用
-//     cache 引用替代 system。仅当用户自定义 GPT_SYSTEM_PROMPT 长度 ≥ 1000 chars
-//     时启用（短 prompt 进 Moonshot 会拒绝）。
-//
-// ## 不接入的
-//
-//   - ops_summary  运维结果总结 prompt < 200 tokens（达不到缓存最低门槛）
-//   - vision OCR   单图调用、prompt 短（~500 tokens），且图片本身才是 token 大头
+//   - **recognize / ops_sql**（K2 系列）：cacheEntry 字段空，不主动 prime；
+//     bot 每次发 system message 字节级相同，让 K2 服务端自动前缀缓存命中。
+//   - **chat**（moonshot-v1-auto）：仅当 IsMoonshotPlatform() && prompt 长度 ≥ 1000 时启用
+//     显式 cache；否则走老路。
 //
 // ## 设计要点
 //
@@ -42,16 +37,21 @@
 package kimi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"qq_bot/conf"
 	zaplog "qq_bot/utils/zap"
 
-	"github.com/northes/go-moonshot"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 const (
@@ -76,13 +76,11 @@ const (
 
 // cacheEntry 一份独立 prompt 缓存的状态机。
 //
-// 多个独立用途（recognize / ops_sql / chat）各拥有自己的 cacheEntry，互不影响：
-//   - 某一份 prime 失败不会拖累其它路径
-//   - 不同 model family 各自缓存（Moonshot 按 family 区分缓存）
+// 多个独立用途（recognize / ops_sql / chat）各拥有自己的 cacheEntry，互不影响。
+// 非 Moonshot 平台所有字段保持空——loadID() 返回 ""，dropIfMissing 也 noop。
 type cacheEntry struct {
 	// 创建时确定，运行期不再改：
 	name         string
-	modelFamily  moonshot.ChatCompletionsModelFamily
 	systemPrompt string
 	// 运行期可变：
 	id        atomic.Value // string；空 = 未就绪 / 创建失败 / 主动失效
@@ -90,6 +88,9 @@ type cacheEntry struct {
 }
 
 func (e *cacheEntry) loadID() string {
+	if e == nil {
+		return ""
+	}
 	v, _ := e.id.Load().(string)
 	return v
 }
@@ -98,40 +99,37 @@ func (e *cacheEntry) storeID(id string) {
 	e.id.Store(id)
 }
 
-// prime 同步创建一份缓存，结果写入 e.id。失败仅 warn。
-func (e *cacheEntry) prime(parent context.Context, cli *moonshot.Client) {
+// prime 同步创建一份 Moonshot 缓存，结果写入 e.id。失败仅 warn。
+//
+// 仅当主 BaseURL 指向 Moonshot 时才真正调 /v1/caching；其它平台 / 空 systemPrompt 直接 return。
+func (e *cacheEntry) prime(parent context.Context, _ *openai.Client) {
 	if e.systemPrompt == "" {
+		return
+	}
+	if !conf.Cfg.Gpt.IsMoonshotPlatform() {
+		// 非 Moonshot 平台不支持显式 cache，直接退出，依靠各家自动前缀缓存
 		return
 	}
 	ctx, cancel := context.WithTimeout(parent, contextCachePrimeTimeout)
 	defer cancel()
 
-	req := &moonshot.ContextCacheCreateRequest{
-		Model: e.modelFamily,
-		Messages: []moonshot.ChatCompletionsMessage{
-			{Role: moonshot.RoleSystem, Content: e.systemPrompt},
-		},
-		Name:      e.name,
-		TTL:       int64(contextCacheTTL.Seconds()),
-		ExpiredAt: time.Now().Add(contextCacheTTL).Unix(),
-	}
-	resp, err := cli.ContextCache().Create(ctx, req)
+	id, tokens, err := moonshotCreateCache(ctx, e.name, e.systemPrompt)
 	if err != nil {
-		zaplog.Logger.Warnf("context cache 创建失败 name=%s family=%s, 该路径将退化到每次发完整 system prompt: %v",
-			e.name, e.modelFamily, err)
+		zaplog.Logger.Warnf("Moonshot context cache 创建失败 name=%s, 该路径将退化到每次发完整 system prompt: %v",
+			e.name, err)
 		return
 	}
-	if resp == nil || resp.Id == "" {
-		zaplog.Logger.Warnf("context cache name=%s 创建返回空 id; 该路径走老路", e.name)
+	if id == "" {
+		zaplog.Logger.Warnf("Moonshot context cache name=%s 创建返回空 id; 该路径走老路", e.name)
 		return
 	}
-	e.storeID(resp.Id)
-	zaplog.Logger.Infof("context cache 就绪 name=%s id=%s tokens=%d ttl=%s",
-		e.name, resp.Id, resp.Tokens, contextCacheTTL)
+	e.storeID(id)
+	zaplog.Logger.Infof("Moonshot context cache 就绪 name=%s id=%s tokens=%d ttl=%s",
+		e.name, id, tokens, contextCacheTTL)
 }
 
 // startPrimeOnce 启动时调一次（非阻塞）：异步创建缓存。
-func (e *cacheEntry) startPrimeOnce(parent context.Context, cli *moonshot.Client) {
+func (e *cacheEntry) startPrimeOnce(parent context.Context, cli *openai.Client) {
 	e.primeOnce.Do(func() {
 		go e.prime(parent, cli)
 	})
@@ -139,10 +137,15 @@ func (e *cacheEntry) startPrimeOnce(parent context.Context, cli *moonshot.Client
 
 // dropIfMissing 把"cache not found"类错误识别出来：清空内存 id 并触发后台重建。
 //
-// Moonshot 没有统一的"cache 不存在"错误码；按响应里 message 的关键字判定。保守起见——
+// 没有统一的"cache 不存在"错误码；按响应里 message 的关键字判定。保守起见——
 // 错杀的代价只是多发一次 system prompt 老路。
-func (e *cacheEntry) dropIfMissing(err error, cli *moonshot.Client) bool {
+//
+// **非 Moonshot 平台永远返回 false**（我们根本没设过 cache，错误肯定不是 cache 失效）。
+func (e *cacheEntry) dropIfMissing(err error, cli *openai.Client) bool {
 	if err == nil {
+		return false
+	}
+	if !conf.Cfg.Gpt.IsMoonshotPlatform() {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
@@ -162,7 +165,7 @@ func (e *cacheEntry) dropIfMissing(err error, cli *moonshot.Client) bool {
 	if !hit {
 		return false
 	}
-	zaplog.Logger.Warnf("context cache 失效 name=%s, 清空 id 并触发后台重建: %v", e.name, err)
+	zaplog.Logger.Warnf("Moonshot context cache 失效 name=%s, 清空 id 并触发后台重建: %v", e.name, err)
 	e.storeID("")
 	// 后台重建：用不会被本次 ctx cancel 影响的新 context；只重置 once 是为了让外部
 	// 看到的 startPrimeOnce 仍然幂等，这里直接绕过 once 触发重建。
@@ -172,9 +175,13 @@ func (e *cacheEntry) dropIfMissing(err error, cli *moonshot.Client) bool {
 
 // cacheReferenceMessage 构造一条 "Role:cache, Content:cache_id=...;reset_ttl=..." 的
 // 消息——所有调用点共用同一格式。
-func cacheReferenceMessage(id string) *moonshot.ChatCompletionsMessage {
-	return &moonshot.ChatCompletionsMessage{
-		Role:    moonshot.RoleContextCache,
+//
+// 注：openai.ChatCompletionMessage 没有 RoleContextCache 这个值（这是 Moonshot 私有
+// 扩展），但 Role 字段是 string 类型，可以直接写 "cache" —— Moonshot 服务端能正确解读。
+// 非 Moonshot 平台 cacheID 永远是空，所以不会构造这种消息，调用方无需担心兼容性。
+func cacheReferenceMessage(id string) openai.ChatCompletionMessage {
+	return openai.ChatCompletionMessage{
+		Role:    "cache",
 		Content: fmt.Sprintf("cache_id=%s;reset_ttl=%d", id, contextCacheResetTTLSeconds),
 	}
 }
@@ -182,8 +189,7 @@ func cacheReferenceMessage(id string) *moonshot.ChatCompletionsMessage {
 // StartContextCachePrime 启动时调一次（非阻塞）：异步并行 prime 所有启用的 cache。
 //
 // recognize / ops_sql 的 cacheEntry 字段为空（systemPrompt == ""），prime 内部
-// 直接 return；只有 chat（且 prompt 足够长）会真正调 Moonshot 创建缓存。详见
-// 文件头部"接入策略"段。
+// 直接 return；只有 chat（且 prompt 足够长 + 平台是 Moonshot）会真正调 API 创建缓存。
 //
 // 调用方应在 InitKimi 之后调。失败仅 warn，业务零影响（各调用路径自动 fallback
 // 到每次发完整 system prompt）。
@@ -191,15 +197,81 @@ func (k *Kimi) StartContextCachePrime(parent context.Context) {
 	if k == nil {
 		return
 	}
-	// recognize / ops_sql 默认 model 是 kimi-k2-* —— Moonshot 显式 /v1/caching API
-	// 不支持 K2 family，但 K2 服务端有"自动前缀缓存"：连续请求 prompt 前缀完全一致
-	// 即自动命中缓存价。bot 端只需保证每次请求 system message 字节级相同即可。
-	// 详见文件头部"接入策略"段。
-	zaplog.Logger.Infof("context cache: recognize / ops_sql 走 kimi-k2 自动前缀缓存（每次请求 system 不变即可命中）")
+	if !conf.Cfg.Gpt.IsMoonshotPlatform() {
+		zaplog.Logger.Infof("context cache: 非 Moonshot 平台（base_url=%s），跳过显式 cache 注册，依赖各平台自动前缀缓存",
+			conf.Cfg.Gpt.EffectiveBaseURL())
+		return
+	}
+	zaplog.Logger.Infof("context cache: recognize / ops_sql 走 Moonshot K2 自动前缀缓存（每次请求 system 不变即可命中）")
 
-	// chatCache 只在 prompt 足够长时才被 InitKimi 填字段——空字段 systemPrompt
-	// 的 prime 内部会直接 return 不调 Moonshot，所以无脑 start 也安全。
+	// chatCache 只在 prompt 足够长 + Moonshot 平台时被 InitKimi 填字段——空字段 systemPrompt
+	// 的 prime 内部会直接 return 不调 API，所以无脑 start 也安全。
 	k.recognizeCache.startPrimeOnce(parent, k.cli)
 	k.opsSQLCache.startPrimeOnce(parent, k.cli)
 	k.chatCache.startPrimeOnce(parent, k.cli)
+}
+
+// ============================================================================
+// Moonshot /v1/caching raw HTTP 客户端（go-openai SDK 不支持这个专属接口）
+// ============================================================================
+
+// moonshotCreateCacheReq /v1/caching POST 请求体。
+type moonshotCreateCacheReq struct {
+	Model     string                 `json:"model"`
+	Messages  []map[string]string    `json:"messages"`
+	Name      string                 `json:"name,omitempty"`
+	TTL       int64                  `json:"ttl,omitempty"`
+	ExpiredAt int64                  `json:"expired_at,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// moonshotCreateCacheResp /v1/caching POST 响应体（仅取需要的字段）。
+type moonshotCreateCacheResp struct {
+	ID     string `json:"id"`
+	Tokens int    `json:"tokens"`
+}
+
+// moonshotCreateCache 通过 raw HTTP 调 Moonshot /v1/caching 接口创建一个命名缓存。
+//
+// 跟 go-openai SDK 解耦——caching 是 Moonshot 私有扩展，没有标准 API 定义。
+// 只在 conf.Cfg.Gpt.IsMoonshotPlatform() 为 true 时才被调到。
+func moonshotCreateCache(ctx context.Context, name, systemPrompt string) (string, int, error) {
+	reqBody := moonshotCreateCacheReq{
+		// 走 moonshot-v1 family（默认 Model 通常就是 moonshot-v1-auto；K2 family 不支持
+		// caching，由调用方在 IsMoonshotPlatform 后还需要保证 prompt + Model 属于 v1）。
+		Model: "moonshot-v1",
+		Messages: []map[string]string{
+			{"role": "system", "content": systemPrompt},
+		},
+		Name:      name,
+		TTL:       int64(contextCacheTTL.Seconds()),
+		ExpiredAt: time.Now().Add(contextCacheTTL).Unix(),
+	}
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", 0, fmt.Errorf("marshal cache req: %w", err)
+	}
+
+	url := strings.TrimRight(conf.Cfg.Gpt.EffectiveBaseURL(), "/") + "/caching"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return "", 0, fmt.Errorf("new request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+conf.Cfg.Gpt.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode/100 != 2 {
+		return "", 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateLog(string(body), 400))
+	}
+	var out moonshotCreateCacheResp
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", 0, fmt.Errorf("unmarshal resp: %w, raw=%s", err, truncateLog(string(body), 200))
+	}
+	return out.ID, out.Tokens, nil
 }

@@ -4,18 +4,18 @@ go 1.22
 
 require (
 	github.com/disintegration/imaging v1.6.2
+	github.com/fsnotify/fsnotify v1.8.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/websocket v1.5.3
-	github.com/northes/go-moonshot v0.5.2
+	github.com/joho/godotenv v1.5.1
 	github.com/panjf2000/ants/v2 v2.11.3
+	github.com/sashabaranov/go-openai v1.41.2
 	github.com/spf13/viper v1.20.0
 	go.uber.org/zap v1.27.0
 )
 
 require (
-	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
-	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
 	github.com/sagikazarmark/locafero v0.7.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect

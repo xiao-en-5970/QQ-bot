@@ -36,8 +36,11 @@ import (
 	"time"
 )
 
-// moonshotVisionEndpoint 与 SDK 内部一致：官方域名 + /v1/chat/completions
-const moonshotVisionEndpoint = "https://api.moonshot.cn/v1/chat/completions"
+// visionEndpointPath 视觉调用使用的 chat completions 路径。
+// 实际 URL = conf.Cfg.Gpt.EffectiveVisionBaseURL() + 这段。
+// 默认指向 Moonshot；切到 DeepSeek 主链路时可独立配置 GPT_VISION_BASE_URL=
+// https://api.moonshot.cn/v1 保持 vision 走 Moonshot。
+const visionEndpointPath = "/chat/completions"
 
 // visionHTTPTimeout 单次 vision 调用超时（含模型推理 + 网络）。
 //
@@ -173,12 +176,13 @@ func (k *Kimi) RecognizeFromImage(ctx context.Context, imageURL string, messageI
 	// 用独立 http.Client 而非 SDK：vision API 的 content 是数组，SDK 类型只支持
 	// string content 不兼容。
 	httpClient := &http.Client{Timeout: visionHTTPTimeout}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, moonshotVisionEndpoint, bytes.NewReader(bodyBytes))
+	endpoint := strings.TrimRight(conf.Cfg.Gpt.EffectiveVisionBaseURL(), "/") + visionEndpointPath
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("vision new req: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+conf.Cfg.Gpt.APIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+conf.Cfg.Gpt.EffectiveVisionAPIKey())
 
 	httpResp, err := httpClient.Do(httpReq)
 	globalQuotaGate.RecordResult(err)

@@ -156,6 +156,17 @@ func runVisionOnOneImage(
 		return "", ackKindIgnore
 	}
 
+	// **黑名单关键词检查**：OCR 出来的 title + content + reason 任一段命中关键词
+	// → 静默丢弃这张图（不上架、不回复）。校园里有人把"家教/兼职/代考"等违规品类
+	// 做成水印图发群里，文字路径完全过滤不到，必须在 OCR 后再过一道。
+	ocrText := action.Title + " " + action.Description + " " + action.SeekHint
+	if kw, hit := conf.Cfg.Bot.MatchBlockedKeyword(ocrText); hit {
+		zaplog.Logger.Infof("autoReply image-OCR 黑名单命中 group=%d user=%d msg=%d kw=%q title=%q → 静默丢弃",
+			key.GroupID, key.UserID, msg.MessageID, kw, truncateForLog(action.Title, 60))
+		metrics.IncRecognize("blocked_keyword")
+		return "", ackKindIgnore
+	}
+
 	// 复用 dispatchActionToHfut：UpsertQQChild + publish_good 落库 + dup 处理。
 	// skipRateLimit=true：整桶已经在 processImageOnlySnapshot 入口统一取过限流令牌，
 	// 这里不再 per-image 计数（否则一桶 5 张图就会触发原 max=8 阈值）。

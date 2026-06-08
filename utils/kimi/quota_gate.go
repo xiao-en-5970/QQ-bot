@@ -88,10 +88,14 @@ func (q *quotaGate) RecordResult(err error) {
 	}
 }
 
-// IsQuotaError 判断 err 是否是 Moonshot 配额耗尽错误。
+// IsQuotaError 判断 err 是否是各 LLM 平台的"配额 / rate limit 类"错误。
 //
-// Moonshot 错误格式：`[exceeded_current_quota_error]Your project ...`，所以走字符串匹配。
-// 如果哪天 SDK 暴露强类型错误（typed error）我们改成 errors.Is/As 即可。
+// 跨平台覆盖（基于字符串匹配；go-openai SDK 把 HTTP 错误 body 透传到 err.Error()）：
+//
+//	Moonshot:  exceeded_current_quota_error / rate_limit_reached_error
+//	DeepSeek:  insufficient_balance / insufficient_quota
+//	OpenAI:    insufficient_quota / rate_limit_exceeded
+//	通用:       HTTP 429
 //
 // 暴露给 logic 层使用——quota gate 触发熔断需要 ≥ threshold 次累积，但单条消息不该
 // 被白白 drop；上层检测到 raw quota error 时同样直接静默（不做兜底，避免错落库）。
@@ -99,24 +103,26 @@ func IsQuotaError(err error) bool {
 	if err == nil {
 		return false
 	}
-	s := err.Error()
-	// 命中两类信号都算（保险起见）：
-	//   - exceeded_current_quota_error  ← 我们日志里见到的真错码
-	//   - rate_limit                    ← Moonshot 把 rate limit 也归这一类时兜底
+	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "exceeded_current_quota_error") ||
-		strings.Contains(s, "rate_limit_reached_error")
+		strings.Contains(s, "rate_limit_reached_error") ||
+		strings.Contains(s, "rate_limit_exceeded") ||
+		strings.Contains(s, "insufficient_quota") ||
+		strings.Contains(s, "insufficient_balance") ||
+		strings.Contains(s, "status code: 429")
 }
 
 // IsRetryableError 判断 err 是否是"重试一次大概率能成功"的临时错误。
 //
+// 跨平台覆盖：
+//
+//	Moonshot:  engine_overloaded_error
+//	DeepSeek:  server overloaded / service unavailable
+//	OpenAI:    server_error / Internal Server Error
+//	通用:       HTTP 5xx / context deadline / i/o timeout
+//
 // 跟 IsQuotaError 互斥：quota 是结构性资源耗尽，重试也没用，应进 quotaGate 熔断；
-// retryable 是 Moonshot 引擎本身的临时容量 / 网络瞬抖，间隔几百毫秒重试通常成功。
-//
-// 已知 retryable 信号：
-//
-//   - engine_overloaded_error  Moonshot 引擎过载（服务端容量瞬时打满）
-//   - context deadline exceeded / i/o timeout  网络层瞬抖
-//   - 5xx server error / Internal Server Error  Moonshot 内部错
+// retryable 是引擎临时容量 / 网络瞬抖，间隔几百毫秒重试通常成功。
 //
 // 单次重试足够覆盖 95% 临时故障，控制 API 调用预算的同时拿到自愈能力。
 func IsRetryableError(err error) bool {
@@ -127,11 +133,18 @@ func IsRetryableError(err error) bool {
 		// quota 错由 quotaGate 熔断处理，不在重试路径里
 		return false
 	}
-	s := err.Error()
+	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "engine_overloaded_error") ||
-		strings.Contains(s, "Internal Server Error") ||
+		strings.Contains(s, "internal server error") ||
 		strings.Contains(s, "i/o timeout") ||
-		strings.Contains(s, "context deadline exceeded")
+		strings.Contains(s, "context deadline exceeded") ||
+		strings.Contains(s, "service unavailable") ||
+		strings.Contains(s, "server overloaded") ||
+		strings.Contains(s, "server_error") ||
+		strings.Contains(s, "status code: 500") ||
+		strings.Contains(s, "status code: 502") ||
+		strings.Contains(s, "status code: 503") ||
+		strings.Contains(s, "status code: 504")
 }
 
 // gateStatusForLog 给 log / 单测用——一行返回当前 gate 内部状态，方便排查。

@@ -16,12 +16,27 @@ import (
 
 // RuntimeOverlay 在 hfut DB 维护、被 bot 周期同步进来的"群相关运行时配置"。
 //
-// 三个字段一一对应 hfut bot_runtime_config 表里的 key（见 dao/bot_runtime_config.go）。
+// 字段一一对应 hfut bot_runtime_config 表里的 key（见 dao/bot_runtime_config.go）。
 // nil 值代表 hfut 那一项**没维护**，由 env / yaml 兜底；不为 nil 代表"以 runtime 为准"。
+//
+// 设计取舍——白名单 vs 静默：
+//   - AutoReplyWhitelist：传统"可回复白名单"——bot 既识别又回复 ack
+//   - SilentWhitelist：只读白名单——bot 同样监听 + 识别 + 落库，**但不在群里发任何反馈**
+//     （运维群通知仍照常）。用于在真实校园群里跑识别准确率实测、不打扰群友。
+//   - SilentMode：旧的全局开关——开启后任何非运维群都被静默。**逐步淘汰**，新部署
+//     直接用 SilentWhitelist 更灵活（按群粒度，无需全局开关）。SilentMode 仍保留作
+//     向后兼容（env / yaml 配 = true 时所有 AutoReplyWhitelist 群都按静默处理）。
+//
+// 设计取舍——黑名单关键词：
+//   - 命中 BlockedKeywords 任一关键词的消息（含图片 OCR 结果）直接拦截，不送 Kimi
+//     识别、不落库、不回复。用于过滤明显的违规品类（家教/兼职/代考/出国/车队等
+//     校园生态不希望承载的内容）。
 type RuntimeOverlay struct {
-	AutoReplyWhitelist []int64 // nil = 未配置，从 env 兜底
-	OpsGroupIDs        []int64 // nil = 未配置，从 env 兜底
-	SilentMode         *bool   // nil = 未配置，从 env 兜底
+	AutoReplyWhitelist []int64  // 可回复白名单：监听 + 识别 + 回复
+	SilentWhitelist    []int64  // 只读白名单：监听 + 识别 + 落库；**不在群里发任何反馈**
+	OpsGroupIDs        []int64  // 运维群
+	SilentMode         *bool    // 旧全局静默开关（向后兼容；建议用 SilentWhitelist 替代）
+	BlockedKeywords    []string // 关键词黑名单：含任一关键词的消息直接拦截
 }
 
 var runtimePtr atomic.Pointer[RuntimeOverlay]

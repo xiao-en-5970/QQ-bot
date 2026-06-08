@@ -158,19 +158,55 @@ type Log struct {
 //
 // 历史的 get_group_history_interval / update_group_list_interval / retry 字段已弃用
 // （WS 模式不再轮询历史消息），yaml 里如果还有这些字段会被 viper 静默忽略。
+// Group 群相关配置——两类白名单 + 窗口聚合参数 + 回执 verbosity。
+//
+// 两类白名单（**核心设计**）：
+//
+//   - AutoReplyWhitelist  可回复白名单：bot 监听消息 + 识别业务 + 在群里回复 ack
+//   - SilentWhitelist     只读白名单：bot 同样监听 + 识别 + 落库，**但不在群里发反馈**
+//
+// 两个列表里的群 IsAutoReplyGroup() 都返回 true（都会进识别管线）；
+// 只有 AutoReplyWhitelist 里的群才走"回复出口"——SilentWhitelist 里的群所有 send_*
+// 调用都被 silent_gate 拦下。
+//
+// 旧的全局 SilentMode 开关（Bot.SilentMode）保留向后兼容，但建议用 SilentWhitelist
+// 按群粒度配置——管理后台改两个列表即可，比"全局开关 + 单一白名单"组合更直观。
 type Group struct {
 	GroupID                []int64 `mapstructure:"group_id,omitempty"`
 	AutoReplyWhitelist     []int64 `mapstructure:"auto_reply_whitelist,omitempty"`
+	SilentWhitelist        []int64 `mapstructure:"silent_whitelist,omitempty"`
 	AutoReplyWindowSeconds int     `mapstructure:"auto_reply_window_seconds,omitempty"`
 	AutoReplyMaxWindowSize int     `mapstructure:"auto_reply_max_window_size,omitempty"`
 	AutoReplyVerbosity     string  `mapstructure:"auto_reply_verbosity,omitempty"`
 }
 
-// IsAutoReplyGroup 判断某群是否启用了"非 @bot 也回复"白名单模式。
+// IsAutoReplyGroup 判断某群是否进入"自动监听 + 识别"管线。
 //
-// 优先用 hfut 同步过来的 RuntimeOverlay.AutoReplyWhitelist；未同步过 / 拉取失败 →
-// 兜底用 env/yaml 加载的 g.AutoReplyWhitelist。
+// **两个白名单任一命中即 true**——AutoReplyWhitelist（可回复）和 SilentWhitelist
+// （只读）的群都会被监听并送 Kimi 识别。"识别后是否在群里发反馈"由
+// IsReplyWhitelistGroup() 决定。
+//
+// 优先用 hfut 同步过来的 RuntimeOverlay；未同步过 / 拉取失败 → 兜底 env/yaml。
 func (g Group) IsAutoReplyGroup(groupID int64) bool {
+	for _, id := range g.effectiveAutoReplyWhitelist() {
+		if id == groupID {
+			return true
+		}
+	}
+	for _, id := range g.effectiveSilentWhitelist() {
+		if id == groupID {
+			return true
+		}
+	}
+	return false
+}
+
+// IsReplyWhitelistGroup 判断某群是否"可以在群里发回执"。
+//
+// 仅 AutoReplyWhitelist 里的群返回 true；SilentWhitelist 里的群即便被监听识别，
+// 也不在群里发任何 ack。该判定 + 旧 SilentMode 全局开关一起决定 silent_gate 行为
+// （见 Bot.IsSilentForGroup）。
+func (g Group) IsReplyWhitelistGroup(groupID int64) bool {
 	for _, id := range g.effectiveAutoReplyWhitelist() {
 		if id == groupID {
 			return true
@@ -190,6 +226,29 @@ func (g Group) effectiveAutoReplyWhitelist() []int64 {
 // EffectiveAutoReplyWhitelist 公开版——给运维 / 日志展示用。
 func (g Group) EffectiveAutoReplyWhitelist() []int64 {
 	return g.effectiveAutoReplyWhitelist()
+}
+
+// effectiveSilentWhitelist 取当前生效的 SilentWhitelist（runtime 优先，env 兜底）。
+func (g Group) effectiveSilentWhitelist() []int64 {
+	if ov := GetRuntimeOverlay(); ov != nil && ov.SilentWhitelist != nil {
+		return ov.SilentWhitelist
+	}
+	return g.SilentWhitelist
+}
+
+// EffectiveSilentWhitelist 公开版。
+func (g Group) EffectiveSilentWhitelist() []int64 {
+	return g.effectiveSilentWhitelist()
+}
+
+// IsSilentWhitelistGroup 群号是否在"只读白名单"中。
+func (g Group) IsSilentWhitelistGroup(groupID int64) bool {
+	for _, id := range g.effectiveSilentWhitelist() {
+		if id == groupID {
+			return true
+		}
+	}
+	return false
 }
 
 // IsAutoReplyVerbose 当前 verbosity 是否 verbose（默认/未配置 = verbose）。
@@ -318,26 +377,103 @@ type Tools struct {
 //	               调用层进入冷却 N 秒（期间 short-circuit 不再调 API、当前窗口直接静默丢弃）。
 //	               <=0 时取默认 1800 秒（30 分钟）。env: GPT_QUOTA_COOLDOWN_SECONDS
 //	QuotaErrorThreshold 触发冷却所需的连续 quota 错次数，<=0 时取默认 3。env: GPT_QUOTA_ERROR_THRESHOLD
+// Gpt LLM 配置——支持任何 OpenAI 兼容的平台（Moonshot/Kimi、DeepSeek、OpenAI、
+// 通义千问 Qwen、智谱 GLM 等都提供 OpenAI 兼容端点，通过 BaseURL 切换）。
+//
+// 推荐 env 配置示例：
+//
+//	# Moonshot/Kimi（默认）
+//	GPT_API_KEY=sk-...
+//	GPT_BASE_URL=https://api.moonshot.cn/v1
+//	GPT_MODEL=moonshot-v1-auto
+//	GPT_RECOGNIZE_MODEL=kimi-k2-0905-preview
+//
+//	# DeepSeek（兜底/替代）
+//	GPT_API_KEY=sk-...
+//	GPT_BASE_URL=https://api.deepseek.com/v1
+//	GPT_MODEL=deepseek-chat
+//	GPT_RECOGNIZE_MODEL=deepseek-chat
+//
+//	# OpenAI
+//	GPT_API_KEY=sk-...
+//	GPT_BASE_URL=https://api.openai.com/v1
+//	GPT_MODEL=gpt-4o-mini
+//	GPT_RECOGNIZE_MODEL=gpt-4o-mini
+//
+// Vision 路径独立配置——因为 DeepSeek 不支持 vision，切到 DeepSeek 时仍可以保留
+// Moonshot 来处理图片 OCR（VisionBaseURL/VisionAPIKey 留空 = 跟主 GPT_* 一致）。
 type Gpt struct {
-	APIKey               string `mapstructure:"api_key"`
-	MaxContextSize       int64  `mapstructure:"max_context_size"`
-	MaxToolRounds        int    `mapstructure:"max_tool_rounds"`
-	SystemPrompt         string `mapstructure:"system_prompt"`
-	Model                string `mapstructure:"model"`
-	RecognizeModel       string `mapstructure:"recognize_model"`
+	APIKey         string `mapstructure:"api_key"`
+	MaxContextSize int64  `mapstructure:"max_context_size"`
+	MaxToolRounds  int    `mapstructure:"max_tool_rounds"`
+	SystemPrompt   string `mapstructure:"system_prompt"`
+
+	// BaseURL 主链路 OpenAI 兼容端点。env: GPT_BASE_URL；空 = 默认 https://api.moonshot.cn/v1
+	//
+	// 切换平台只需要改这一条 + 配对的 APIKey + 对应平台的模型名（Model/RecognizeModel）。
+	// 切到非 Moonshot 平台后，Moonshot 专属的 Context Cache /v1/caching API 自动失效，
+	// 各家依赖"自动前缀缓存"——每次发相同 system prompt 也能命中缓存价，行为透明。
+	BaseURL string `mapstructure:"base_url"`
+
+	Model          string `mapstructure:"model"`
+	RecognizeModel string `mapstructure:"recognize_model"`
 	// OpsFallbackModel 当主模型（RecognizeModel，默认 kimi-k2-0905-preview）在运维
 	// SQL 生成路径持续过载时降级使用的稳定模型。K2 是 preview 模型且带 thinking 推理，
 	// 在"SQL 生成"这种重推理任务上过载概率比"业务识别"这种轻推理任务高得多——
 	// 给 ops_sql 单独提供一条 fallback，让 K2 持续 overloaded 时自动切到 v1 系列继续出 SQL，
 	// 不影响识别路径的 K2 用量。默认 moonshot-v1-auto；env GPT_OPS_FALLBACK_MODEL。
-	OpsFallbackModel     string `mapstructure:"ops_fallback_model"`
+	OpsFallbackModel string `mapstructure:"ops_fallback_model"`
+
+	// VisionBaseURL 多模态 vision OCR 的独立 OpenAI 兼容端点。
+	//
+	// 留空 = 跟主 BaseURL 一致（适用于 Moonshot / OpenAI 等支持 vision 的平台）。
+	// 当主 BaseURL 切到 DeepSeek（不支持 vision）时，可在此独立指回 Moonshot：
+	//   GPT_VISION_BASE_URL=https://api.moonshot.cn/v1
+	//   GPT_VISION_API_KEY=sk-moonshot-xxxx
+	// env: GPT_VISION_BASE_URL
+	VisionBaseURL string `mapstructure:"vision_base_url"`
+
+	// VisionAPIKey 多模态 vision OCR 的独立 API key。留空 = 跟主 APIKey 一致。
+	// env: GPT_VISION_API_KEY
+	VisionAPIKey string `mapstructure:"vision_api_key"`
+
 	// VisionModel 用于 OCR 上架的多模态模型。默认 moonshot-v1-32k-vision-preview；
 	// 仅当窗口里只有图片、用户没补任何业务文字、又过了沉默期时触发——对每张图单独
 	// 调一次 vision API 让模型直接从图片里抽 title / price 等再上架。
 	// env: GPT_VISION_MODEL
-	VisionModel          string `mapstructure:"vision_model"`
-	QuotaCooldownSeconds int    `mapstructure:"quota_cooldown_seconds"`
-	QuotaErrorThreshold  int    `mapstructure:"quota_error_threshold"`
+	VisionModel string `mapstructure:"vision_model"`
+
+	QuotaCooldownSeconds int `mapstructure:"quota_cooldown_seconds"`
+	QuotaErrorThreshold  int `mapstructure:"quota_error_threshold"`
+}
+
+// EffectiveBaseURL 主链路 OpenAI 兼容端点，空 → Moonshot 默认。
+func (g Gpt) EffectiveBaseURL() string {
+	if v := strings.TrimSpace(g.BaseURL); v != "" {
+		return v
+	}
+	return "https://api.moonshot.cn/v1"
+}
+
+// EffectiveVisionBaseURL Vision 端点，空 → 跟主 BaseURL 一致。
+func (g Gpt) EffectiveVisionBaseURL() string {
+	if v := strings.TrimSpace(g.VisionBaseURL); v != "" {
+		return v
+	}
+	return g.EffectiveBaseURL()
+}
+
+// EffectiveVisionAPIKey Vision API key，空 → 跟主 APIKey 一致。
+func (g Gpt) EffectiveVisionAPIKey() string {
+	if v := strings.TrimSpace(g.VisionAPIKey); v != "" {
+		return v
+	}
+	return g.APIKey
+}
+
+// IsMoonshotPlatform 主 BaseURL 是否指向 Moonshot——决定能否启用专属 Context Cache /v1/caching。
+func (g Gpt) IsMoonshotPlatform() bool {
+	return strings.Contains(g.EffectiveBaseURL(), "moonshot")
 }
 
 // Internal bot 暴露给 hfut 调用的"反向 HTTP API" 配置。
@@ -391,21 +527,28 @@ type Bot struct {
 	// 新部署请直接使用 OPS_GROUP_IDS。
 	OpsGroupID int64 `mapstructure:"ops_group_id,omitempty"`
 
-	// SilentMode 灰度静默模式。上线前实战演练时打开：
-	//   - 任何对**非 OpsGroupIDs** 的群消息（识别回执 / @bot 命令 / dup ack / 反向 internal
-	//     API 发出的群消息）都被静默掉，bot 不在群里发任何字
-	//   - 任何群文件上传（jm pdf / pix）也静默
-	//   - **运维群仍正常**：`NotifyOps*` 系列发往 OpsGroupIDs 的运维提醒原样下发，
-	//     ops_query @bot 的运维查询也照常工作
-	//   - **私聊不受影响**：QQ 绑定 / 解绑验证码、订单加急、群接入申请回执等均正常下发。
-	//     这是用户主动触发的链路，不会打扰群友，灰度期间应保留以便真实用户能完成绑定
+	// SilentMode 旧的全局灰度静默开关——**新部署优先用 Group.SilentWhitelist 按群配置**，
+	// 这里保留作向后兼容入口：env / yaml 配 true 时，所有非 OpsGroup 都被静默。
 	//
 	// 业务侧（hfut 数据库写入 / Kimi 识别 / bot_dispatch_event 记录等）**不受影响**——
 	// 静默只是关掉"群里对外可见的消息出口"，目的是在真实校园群里跑识别准确率实测，
 	// 而群友感受不到 bot 存在。
 	//
+	// **建议迁移路径**：把原本启用 SilentMode 时的"所有需要静默观察的群"加到
+	// Group.SilentWhitelist 里，把 SilentMode 设为 false。两种配置可以并存——
+	// IsSilentForGroup() = SilentWhitelist 命中 || (SilentMode && 非 OpsGroup)。
+	//
 	// env: BOT_SILENT_MODE=true|false（默认 false）；admin UI 也可改（bot_runtime_config 表）
 	SilentMode bool `mapstructure:"silent_mode,omitempty"`
+
+	// BlockedKeywords 关键词黑名单——任一关键词出现在用户消息（含图片 OCR 结果）
+	// 中即被拦截，不送 Kimi 识别、不落库、不回复。用于过滤"家教 / 兼职 / 代考 /
+	// 出国 / 车队"等校园生态不希望承载的内容。
+	//
+	// 匹配规则：子串包含（不区分大小写英文部分；中文严格匹配）。
+	// 默认值见 reload() 末段；env: BOT_BLOCKED_KEYWORDS=家教,兼职,代考,...
+	// 也可通过 admin UI 的 bot_runtime_config.blocked_keywords 配置。
+	BlockedKeywords []string `mapstructure:"blocked_keywords,omitempty"`
 }
 
 // IsOpsGroup 群号是否运维群。
@@ -457,14 +600,70 @@ func (b Bot) effectiveSilentMode() bool {
 	return b.SilentMode
 }
 
-// IsSilentForGroup 该群是否应被静默——SilentMode 开 + 非 OpsGroup → true。
+// IsSilentForGroup 该群是否应被静默——两种入口任一命中即 true：
 //
-// 详见 SilentMode 字段注释。
+//  1. 该群在 Group.SilentWhitelist 里（新机制：按群精细控制）
+//  2. SilentMode 全局开关 = true 且该群不是 OpsGroup（旧机制：向后兼容）
+//
+// 静默 = 群内所有 bot send_* 出口（群消息 / 群文件上传等）被拦下，
+// 业务识别 + 落库 + 运维群通知 + 私聊 均不受影响。详见 SilentMode 字段注释。
 func (b Bot) IsSilentForGroup(groupID int64) bool {
-	if !b.effectiveSilentMode() {
-		return false
+	// 新机制：群在只读白名单里 → 静默
+	if Cfg.Group.IsSilentWhitelistGroup(groupID) {
+		return true
 	}
-	return !b.IsOpsGroup(groupID)
+	// 旧机制：全局开关 + 非运维群 → 静默
+	if b.effectiveSilentMode() && !b.IsOpsGroup(groupID) {
+		return true
+	}
+	return false
+}
+
+// effectiveBlockedKeywords 取当前生效的关键词黑名单（runtime 优先，env 兜底）。
+//
+// 关键约定：runtime 那一项 nil = 未配置，由 env 兜底；空数组 [] = "管理员显式清空了
+// 黑名单"，bot 应使用空数组（即不拦截任何）。后者通过 RuntimeOverlay.BlockedKeywords
+// 不为 nil 判断。
+func (b Bot) effectiveBlockedKeywords() []string {
+	if ov := GetRuntimeOverlay(); ov != nil && ov.BlockedKeywords != nil {
+		return ov.BlockedKeywords
+	}
+	return b.BlockedKeywords
+}
+
+// EffectiveBlockedKeywords 公开版——给 admin / 日志展示。
+func (b Bot) EffectiveBlockedKeywords() []string {
+	return b.effectiveBlockedKeywords()
+}
+
+// MatchBlockedKeyword 检查文本是否命中任一黑名单关键词。
+//
+// 返回命中的关键词（用于 log）+ 是否命中 bool。文本和关键词都按"去除多余空白后
+// 子串包含"判定——这样 OCR 出来的"  家   教  "也能命中关键词"家教"。
+// 关键词列表为空 / nil 时永远不命中。
+func (b Bot) MatchBlockedKeyword(text string) (string, bool) {
+	if text == "" {
+		return "", false
+	}
+	words := b.effectiveBlockedKeywords()
+	if len(words) == 0 {
+		return "", false
+	}
+	normText := strings.ReplaceAll(text, " ", "")
+	for _, kw := range words {
+		kw = strings.TrimSpace(kw)
+		if kw == "" {
+			continue
+		}
+		normKw := strings.ReplaceAll(kw, " ", "")
+		if normKw == "" {
+			continue
+		}
+		if strings.Contains(normText, normKw) {
+			return kw, true
+		}
+	}
+	return "", false
 }
 
 // IsSilentForPrivate 私聊是否应被静默——**永远 false**。
@@ -785,6 +984,7 @@ func bindEnvKeys() {
 		"log.std_out_log_level", "log.log_level", "log.log_file",
 		"pixiv.pixiv_address", "pixiv.size",
 		"group.auto_reply_whitelist",
+		"group.silent_whitelist",
 		"group.auto_reply_window_seconds",
 		"group.auto_reply_max_window_size",
 		"group.auto_reply_verbosity",
@@ -792,10 +992,11 @@ func bindEnvKeys() {
 		"cache.tmp_dir", "cache.pdf_tmp_dir", "cache.max_size", "cache.clear_interval",
 		"tools.jmcomic_bin", "tools.img2pdf_bin", "tools.python_bin",
 		"gpt.api_key", "gpt.max_context_size", "gpt.max_tool_rounds", "gpt.system_prompt",
+		"gpt.base_url", "gpt.vision_base_url", "gpt.vision_api_key",
 		"gpt.model", "gpt.recognize_model", "gpt.ops_fallback_model", "gpt.vision_model", "gpt.quota_cooldown_seconds", "gpt.quota_error_threshold",
 		"commands.enabled", "commands.default",
 		"internal.port",
-		"bot.ops_group_id", "bot.ops_group_ids",
+		"bot.ops_group_id", "bot.ops_group_ids", "bot.silent_mode", "bot.blocked_keywords",
 	}
 	for _, k := range keys {
 		_ = viper.BindEnv(k)
@@ -891,6 +1092,15 @@ func applyDefaults(c *Config) {
 	}
 	// 同步 OpsGroupID 到第一项，方便老调用方继续 work（PrimaryOpsGroup 也是这个）
 	c.Bot.OpsGroupID = c.Bot.PrimaryOpsGroup()
+
+	// 黑名单关键词默认值——校园场景常见的违规品类。
+	// 显式配 BOT_BLOCKED_KEYWORDS=（空字符串）会被 viper 解析为空数组 = 不拦截；
+	// 想用默认就别配 env 或者删掉该 env 行。
+	if c.Bot.BlockedKeywords == nil {
+		c.Bot.BlockedKeywords = []string{
+			"家教", "兼职", "代考", "考试", "论文", "代跑", "出国", "车队",
+		}
+	}
 }
 
 func isWindows() bool {
