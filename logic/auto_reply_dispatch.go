@@ -277,8 +277,15 @@ func dispatchSeekGoods(ctx context.Context, key autoReplyBucketKey, userID uint,
 }
 
 // seekForwardMaxItems 合并转发卡片里最多列几个匹配项（商品 / 求购者都按此上限）。
-// 太多会让聊天记录卡片很长，群友点开后疲劳；3 个能覆盖绝大多数有用匹配。
-const seekForwardMaxItems = 3
+//
+// 设计取舍：bot 的核心价值是"上架/求物品时找历史匹配做信息打通"——尽可能多地把
+// 同类历史信息一次性呈现给用户。上限取 50 而不是无限：
+//
+//   - 一张合并转发卡片的节点数 = items × ~5（每商品: 文字 + 最多 3 张图 + 联系方式）
+//     50 个 item × 5 = 250 节点已经接近 NapCat 合并转发 ~100-300 节点的上限
+//   - 实战中同一关键词命中 > 50 个历史商品的场景极少；50 已经覆盖几乎全部场景
+//   - hfut service / client 端的 limit 硬上限同步放宽到 50
+const seekForwardMaxItems = 50
 
 // seekTopMatches 拉 SearchGoodsSeek top N 命中；不命中或失败返回 nil。
 // 失败（含群没配学校）也返回 nil 让上游平滑降级；warn 不打日志干扰主路径。

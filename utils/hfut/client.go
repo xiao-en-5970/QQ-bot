@@ -604,8 +604,9 @@ func (c *Client) SearchActiveSeeks(ctx context.Context, groupID int64, q string,
 	if limit <= 0 {
 		limit = 5
 	}
-	if limit > 10 {
-		limit = 10
+	// 跟 hfut service 端 / bot 调用方的 seekForwardMaxItems 对齐，最多 50 条匹配。
+	if limit > 50 {
+		limit = 50
 	}
 	path := fmt.Sprintf("/api/v1/bot/groups/%d/seekers/by-keyword?q=%s&limit=%d",
 		groupID, url.QueryEscape(strings.TrimSpace(q)), limit)
@@ -627,8 +628,9 @@ func (c *Client) SearchGoodsSeek(ctx context.Context, groupID int64, q string, l
 	if limit <= 0 {
 		limit = 5
 	}
-	if limit > 10 {
-		limit = 10
+	// 跟 hfut service 端 / bot 调用方的 seekForwardMaxItems 对齐，最多 50 条匹配。
+	if limit > 50 {
+		limit = 50
 	}
 	path := fmt.Sprintf("/api/v1/bot/groups/%d/goods/seek?q=%s&limit=%d",
 		groupID, url.QueryEscape(strings.TrimSpace(q)), limit)
