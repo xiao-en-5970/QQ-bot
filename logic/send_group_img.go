@@ -2,7 +2,8 @@ package logic
 
 import (
 	"net/http"
-	"path/filepath"
+	"strconv"
+
 	"qq_bot/model"
 	"qq_bot/service"
 	zaplog "qq_bot/utils/zap"
@@ -11,9 +12,9 @@ import (
 // SendGroupImage 通过 NapCat 的 OB11MessageImage 段发送一张图片。
 //
 // file 支持：
-//   - 本地路径（会被转成绝对路径，再加 file:// 前缀以提高 NapCat 识别成功率）
+//   - 本地路径 / file:// 本地 URI（会被读出内容内联成 base64://，因为 NapCat 现在
+//     跑在远程主机上，读不到 bot 本地磁盘；详见 napCatFileRef）
 //   - http(s):// URL
-//   - file:// URI
 //   - base64:// 数据
 //
 // summary 是图片外显文本，可空。
@@ -24,7 +25,7 @@ func SendGroupImage(client *http.Client, groupID int64, file string, summary str
 	if silentSuppressGroup(groupID, "[image]"+summary) {
 		return nil
 	}
-	resolved, err := resolveImageRef(file)
+	resolved, err := napCatFileRef(file)
 	if err != nil {
 		return err
 	}
@@ -42,26 +43,18 @@ func SendGroupImage(client *http.Client, groupID int64, file string, summary str
 		},
 	})
 	if err != nil {
-		zaplog.Logger.Errorf("napcat send_group_msg(image) failed group=%d file=%s: %v", groupID, resolved, err)
+		// base64:// 引用可能很长，日志里只截断打印避免刷屏
+		zaplog.Logger.Errorf("napcat send_group_msg(image) failed group=%d file=%s: %v", groupID, truncateRef(resolved), err)
 		return err
 	}
 	return nil
 }
 
-// resolveImageRef 让任意本地路径变成 NapCat 喜欢的 file:// URI，URL / base64 / file 原样返回。
-func resolveImageRef(ref string) (string, error) {
-	switch {
-	case startsWith(ref, "http://"), startsWith(ref, "https://"),
-		startsWith(ref, "file://"), startsWith(ref, "base64://"):
-		return ref, nil
+// truncateRef 打日志用：base64:// 引用体积大，截断展示，其余原样。
+func truncateRef(ref string) string {
+	const max = 64
+	if len(ref) <= max {
+		return ref
 	}
-	abs, err := filepath.Abs(ref)
-	if err != nil {
-		return "", err
-	}
-	return "file://" + abs, nil
-}
-
-func startsWith(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+	return ref[:max] + "...(" + strconv.Itoa(len(ref)) + "B)"
 }
